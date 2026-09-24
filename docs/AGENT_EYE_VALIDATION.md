@@ -1,18 +1,16 @@
 # Agent-eye validation — 2026-09-24
 
-## Executed before publication
+## Executed on the rebased branch
 
 - Python 3.13.5, Pydantic 2.13.4. Installed editable with local dependencies.
-- `python -m pytest -q`: **105 passed** (52 foundation + 53 agent-eye tests).
+- `python -m pytest -q`: **127 passed** (68 foundation + 59 agent-eye tests).
 - All three synthetic arena demos terminate after disabling the practice target.
-- `python scripts/check_eye_browser.py --chromium /usr/bin/chromium`: passed.
-  Browser interactions include next, seek, zero-turn prompt display, hearing,
-  separate hypotheses, and memory overlay toggles. Desktop (1440px) and narrower
-  (700px) layouts were inspected. No JavaScript page errors remained.
-- Browser content was loaded via Playwright `set_content`; direct file navigation
-  is restricted by this container's browser policy and was not tested here.
 - `python -m compileall -q src scripts integrations`: passed.
-- Original mock smoke and branch/replay example remain passing.
+- `qudgym smoke`, `python examples/branch_and_replay.py`, and the .NET 10
+  `BridgeCore` smoke test passed.
+- The browser smoke test was not rerun locally because this checkout does not
+  have Playwright/Chromium installed. The pre-rebase browser run passed, but
+  the rebased PR must rely on a fresh CI browser job for confirmation.
 
 ## What the new tests establish
 
