@@ -24,6 +24,8 @@ MAX_RELATIONS = 16_384
 MAX_EVENTS = 4_096
 MAX_ACTIONS = 4_096
 MAX_HYPOTHESES = 256
+MAX_VIEW_RECORDS = 4096
+MAX_VIEW_EVENTS = 4096
 
 
 class EyeModel(BaseModel):
@@ -296,9 +298,9 @@ class Hypothesis(EyeModel):
 class AgentView(EyeModel):
     schema_version: Literal["agent-view/1"] = "agent-view/1"
     current: Frame
-    remembered: tuple[MemoryRecord, ...] = Field(default=(), max_length=4096)
+    remembered: tuple[MemoryRecord, ...] = Field(default=(), max_length=MAX_VIEW_RECORDS)
     hypotheses: tuple[Hypothesis, ...] = Field(default=(), max_length=MAX_HYPOTHESES)
-    remembered_events: tuple[EventMemory, ...] = Field(default=(), max_length=4096)
+    remembered_events: tuple[EventMemory, ...] = Field(default=(), max_length=MAX_VIEW_EVENTS)
     forgotten_events: Tick = 0
     forgotten_records: Tick = 0
 

@@ -284,7 +284,7 @@ def test_memory_limits_and_event_history():
     assert v.remembered_events and v.remembered_events[0].event.text == 'Synthetic arena: disable the practice target.'
 
 
-@pytest.mark.parametrize('limit', [0, -1, True, 1.5])
+@pytest.mark.parametrize('limit', [0, -1, True, 1.5, 4097])
 def test_invalid_memory_limits(limit):
     with pytest.raises(ValueError):
         EvidenceMemory(max_records=limit)

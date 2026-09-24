@@ -2,6 +2,8 @@
 from collections import OrderedDict
 
 from .contracts import (
+    MAX_VIEW_EVENTS,
+    MAX_VIEW_RECORDS,
     AgentView,
     EventMemory,
     Fact,
@@ -44,6 +46,8 @@ class EvidenceMemory:
     def __init__(self, *, max_records: int = 4096, max_decisions: int = 256, max_events: int = 256):
         if any(type(x) is not int or x < 1 for x in (max_records, max_decisions, max_events)):
             raise ValueError("memory limits must be positive integers")
+        if max_records > MAX_VIEW_RECORDS or max_events > MAX_VIEW_EVENTS:
+            raise ValueError("memory limits exceed the agent-view budget")
         self.max_records, self.max_decisions = max_records, max_decisions
         self.max_events = max_events
         self.reset()
