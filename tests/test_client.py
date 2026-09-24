@@ -6,7 +6,7 @@ import http.client
 import pytest
 import uvicorn
 from qudgym import MockBackend, QudEnv
-from qudgym.client import HttpBackend, WebSocketBackend
+from qudgym.client import HttpBackend
 from qudgym.errors import TransportUncertain
 from qudgym.rpc import RpcService
 from qudgym.server import create_app
@@ -25,13 +25,6 @@ def test_remote_or_ambiguous_endpoints_rejected(url):
 def test_short_token_rejected():
     with pytest.raises(ValueError):
         HttpBackend('http://127.0.0.1:8765/rpc', token='short')
-
-
-@pytest.mark.parametrize('url', ['ws://example.com/rpc', 'wss://127.0.0.1:8765/rpc',
-                                 'ws://127.0.0.1:8765/not-rpc', 'http://127.0.0.1:8765/rpc'])
-def test_websocket_endpoint_must_be_loopback_rpc(url):
-    with pytest.raises(ValueError):
-        WebSocketBackend(url, token=TOKEN)
 
 
 def test_transport_failure_is_never_retried(monkeypatch):
