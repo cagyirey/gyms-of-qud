@@ -41,7 +41,12 @@ def read_trace(path: str | Path) -> list[Record]:
         raw = f.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES:
         raise ValueError("trace exceeds 32 MiB")
-    lines = raw.decode("utf-8").splitlines()
+    # splitlines() also breaks on U+2028, U+2029 and U+0085, which JSON leaves
+    # raw inside strings. Records are delimited only by the newline we wrote.
+    text = raw.decode("utf-8")
+    if text.endswith("\n"):
+        text = text[:-1]
+    lines = text.split("\n") if text else []
     if not 1 <= len(lines) <= MAX_RECORDS or any(not line.strip() for line in lines):
         raise ValueError("trace must contain 1..2048 nonempty records")
     records = [Record.model_validate_json(line) for line in lines]
@@ -125,8 +130,10 @@ el('raw').textContent=JSON.stringify(v,null,2);drawMap();}
 function drawMap(){const v=rows[index].view,f=v.current,z=f.zones.find(z=>z.id===el('zones').value),c=el('map'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);layout=null;if(!z)return;
 const s=Math.min(c.width/z.width,c.height/z.height),ox=(c.width-z.width*s)/2,oy=(c.height-z.height*s)/2;layout={z,s,ox,oy};
 function tile(x,y,txt,color){ctx.fillStyle=color;ctx.fillRect(ox+x*s+1,oy+y*s+1,Math.max(1,s-2),Math.max(1,s-2));if(s>=12){ctx.fillStyle='#dce5ef';ctx.font=Math.min(22,s*.55)+'px monospace';ctx.textAlign='center';ctx.fillText(txt,ox+(x+.5)*s,oy+(y+.68)*s);}}
-if(el('memory').checked)for(const m of v.remembered){const prefix='cell:'+z.id+':';if(m.subject.startsWith(prefix)){const xy=m.subject.slice(prefix.length).split(':').map(Number);if(xy.length===2&&xy.every(Number.isFinite)&&xy[0]<z.width&&xy[1]<z.height)tile(xy[0],xy[1],String(m.fact.value??'?').slice(0,1),'#54432c');}}
-for(const cell of z.cells){const p=cell.layers[0].fact;tile(cell.x,cell.y,String(p.value??'?').slice(0,1),'#2b4b48');}
+function glyphLayer(layers){return layers.find(l=>l.id==='terrain'||l.id==='ground'||l.id==='glyph'||(l.fact&&(l.fact.attribute==='terrain'||l.fact.attribute==='glyph')))||layers.find(l=>l);}
+function glyphRank(m){if(m.attribute==='layer:terrain'||(m.fact&&m.fact.attribute==='terrain'))return 3;if(m.attribute==='layer:ground')return 2;if(m.attribute==='layer:glyph'||(m.fact&&m.fact.attribute==='glyph'))return 1;return 0;}
+if(el('memory').checked){const painted=new Map();for(const m of v.remembered){const prefix='cell:'+z.id+':';const rank=glyphRank(m);if(!rank||!m.subject.startsWith(prefix))continue;const xy=m.subject.slice(prefix.length).split(':').map(Number);if(xy.length!==2||xy.some(n=>!Number.isFinite(n))||xy[0]>=z.width||xy[1]>=z.height)continue;const key=xy[0]+','+xy[1];if((painted.get(key)||0)>=rank)continue;painted.set(key,rank);tile(xy[0],xy[1],String(m.fact.value??'?').slice(0,1),'#54432c');}}
+for(const cell of z.cells){const p=glyphLayer(cell.layers).fact;tile(cell.x,cell.y,String(p.value??'?').slice(0,1),'#2b4b48');}
 if(el('memory').checked)for(const m of v.remembered){const p=m.fact;if(m.attribute==='location'&&p.zone===z.id){ctx.strokeStyle='#eabf72';ctx.lineWidth=3;ctx.strokeRect(ox+p.x*s+5,oy+p.y*s+5,Math.max(1,s-10),Math.max(1,s-10));}}
 for(const e of f.entities){const p=e.location;if(!p||p.zone!==z.id)continue;ctx.beginPath();ctx.arc(ox+(p.x+.5)*s,oy+(p.y+.5)*s,Math.max(2,s*.28),0,Math.PI*2);ctx.fillStyle=e.id===f.controlled_actor?'#f0f5fa':'#80d7bc';ctx.fill();if(s>=16){ctx.fillStyle='#0b1720';ctx.font=Math.min(15,s*.35)+'px monospace';ctx.textAlign='center';ctx.fillText(e.id,ox+(p.x+.5)*s,oy+(p.y+.58)*s);}}}
 el('map').addEventListener('mousemove',e=>{if(!layout)return;const rect=el('map').getBoundingClientRect(),{z,s,ox,oy}=layout;const x=Math.floor(((e.clientX-rect.left)*900/rect.width-ox)/s),y=Math.floor(((e.clientY-rect.top)*500/rect.height-oy)/s);const cell=z.cells.find(c=>c.x===x&&c.y===y);el('where').textContent=location({zone:z.id,x,y})+': '+(cell?cell.layers.map(l=>l.id+'='+value(l.fact)+' ['+ev(l.fact.evidence)+']').join('; '):'not currently disclosed');});

@@ -10,6 +10,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Ref = Annotated[str, Field(min_length=1, max_length=160)]
+# cell:{zone}:{x}:{y} keeps a full zone id plus coordinates through 1023.
+MemorySubject = Annotated[str, Field(min_length=1, max_length=175)]
 Text = Annotated[str, Field(max_length=8192)]
 Tick = Annotated[int, Field(ge=0, strict=True)]
 Scalar = str | int | float | bool | None
@@ -236,7 +238,7 @@ class Frame(EyeModel):
 
 
 class MemoryRecord(EyeModel):
-    subject: Ref
+    subject: MemorySubject
     attribute: str
     fact: Fact | Position
     last_decision: Ref

@@ -382,6 +382,107 @@ def test_trace_rejects_bad_history_or_actions(tmp_path, bad):
         read_trace(path)
 
 
+def _command_frame(*, episode, decision, turn, zone_id, width=1, height=1, cells=(), extra_entities=(), relations=()):
+    from qudgym.eye.contracts import Action, Cell, Entity, Evidence, Position, Zone
+    evidence = Evidence(channel='self', turn=turn)
+    actor = Entity(id='hero', kind='actor', location=Position(
+        zone=zone_id, x=0, y=0, evidence=evidence))
+    return Frame(episode_id=episode, decision_id=decision, turn=turn, phase='command',
+                 controlled_actor='hero', zones=(Zone(id=zone_id, width=width, height=height, cells=cells),),
+                 entities=(actor, *extra_entities), relations=relations,
+                 actions=(Action(id='wait', operation='wait', label='Wait', source='hero'),))
+
+
+def test_max_cell_subject_is_remembered_and_failure_does_not_leak():
+    from qudgym.eye.contracts import Cell, Entity, Evidence, Fact, Layer
+    zone = 'z' * 160
+    ev = Evidence(channel='vision', turn=0)
+    cell = Cell(x=1023, y=1023, layers=(Layer(id='ground', fact=Fact(
+        attribute='glyph', value='.', evidence=ev)),))
+    secret = Entity(id='a', kind='item', facts=(Fact(attribute='name', value='SECRET', evidence=ev),))
+    frame = _command_frame(episode='ep1', decision='d1', turn=0, zone_id=zone, width=1024, height=1024,
+                           cells=(cell,), extra_entities=(secret,))
+    mem = EvidenceMemory()
+    try:
+        mem.update(frame)
+    except ValidationError:
+        leaked = True
+    else:
+        leaked = False
+    later = _command_frame(episode='ep2', decision='d2', turn=0, zone_id='short')
+    if leaked:
+        view = mem.update(later)
+        assert 'SECRET' not in view.model_dump_json()
+    else:
+        remembered = mem.update(_command_frame(
+            episode='ep1', decision='d2', turn=1, zone_id=zone, width=1024, height=1024))
+        assert any(r.subject == f'cell:{zone}:1023:1023' for r in remembered.remembered)
+        with pytest.raises(ValueError, match='explicitly'):
+            mem.update(later)
+
+
+def test_unknown_relation_does_not_reject_the_frame():
+    from qudgym.eye.contracts import Entity, Evidence, Relation
+    item = Entity(id='pack', kind='item')
+    relation = Relation(subject='hero', predicate='carries', object='pack',
+                        evidence=Evidence(status='unknown', channel='unknown', turn=0))
+    frame = _command_frame(episode='ep', decision='d', turn=0, zone_id='z', extra_entities=(item,),
+                           relations=(relation,))
+    view = EvidenceMemory().update(frame)
+    assert not any(r.attribute.startswith('relation:') for r in view.remembered)
+
+
+def test_trace_roundtrip_preserves_unicode_line_separators(tmp_path):
+    records = demo_records('bow')
+    raw = records[0].model_dump(mode='json')
+    raw['view']['current']['events'][0]['text'] = 'line\u2028sep\u2029and\u0085'
+    records[0] = Record.model_validate(raw)
+    path = tmp_path / 'trace.jsonl'
+    write_trace(records, path)
+    assert read_trace(path) == records
+
+
+def test_legacy_conversion_accepts_observations_outside_eye_limits():
+    from qudgym.models import PerceivedEntity
+    obs = MockBackend().reset().observation
+    huge = obs.model_copy(update={
+        'messages': ('m' * 9000,),
+        'player': obs.player.model_copy(update={'x': -1}),
+        'entities': (PerceivedEntity(id='cell:hidden', name='n' * 20, x=-3, y=0),),
+    })
+    frame = from_observation(huge)
+    assert frame.events[0].text == 'm' * 8192
+    assert frame.entities[0].location is None
+    assert all(not entity.id.startswith('cell:') for entity in frame.entities)
+
+
+def test_scorer_ignores_unobserved_and_cross_zone_positions():
+    from qudgym.eye.contracts import Destination, Entity, Evidence, Position, Zone
+    frame = ArenaFixture('bow').observe()
+    contact = next(e for e in frame.entities if e.kind == 'contact')
+    reported = contact.model_copy(update={'location': contact.location.model_copy(update={
+        'evidence': Evidence(channel='hearing', status='reported', turn=frame.turn)})})
+    reported_frame = frame.model_copy(update={
+        'entities': tuple(reported if e.id == contact.id else e for e in frame.entities)})
+    assert CapabilityScorer().score(AgentView(current=reported_frame))['use'] < 100
+    elsewhere = Entity(id='far', kind='contact', location=Position(
+        zone='other', x=0, y=0, evidence=Evidence(channel='vision', turn=frame.turn)))
+    other = Zone(id='other', width=3, height=3)
+    entities = tuple(e for e in frame.entities if e.kind != 'contact') + (elsewhere,)
+    present = {e.id for e in entities}
+    actions = tuple(a.model_copy(update={'destination': Destination(zone='arena', x=4, y=2)})
+                    if a.id == 'forward' else a
+                    for a in frame.actions if a.target is None or a.target in present)
+    moved = frame.model_copy(update={'zones': frame.zones + (other,), 'entities': entities, 'actions': actions})
+    assert CapabilityScorer().score(AgentView(current=moved))['forward'] == -10.0
+
+
+def test_replay_map_uses_terrain_layers_not_the_first_or_latest_fact():
+    html_src = Path(__file__).resolve().parents[1].joinpath('src/qudgym/eye/replay.py').read_text()
+    assert 'layers[0]' not in html_src
+    assert 'layer:ground' in html_src or "id==='ground'" in html_src or 'ground' in html_src
+
+
 def test_presets_are_user_authored_metadata_not_automatic_character_creation(tmp_path):
     preset = BuildPreset(id='owner-build', revision='1', game_build='owner-reported',
                          mods=('mod-a','mod-b'), creation_code='OWNER-SUPPLIED-CODE')

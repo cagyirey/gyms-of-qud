@@ -15,6 +15,11 @@ def disclosed_records(frame: Frame):
             for layer in cell.layers:
                 records.append((f"cell:{zone.id}:{cell.x}:{cell.y}", f"layer:{layer.id}", layer.fact))
     for r in frame.relations:
+        # An unknown relation has no description value. Skip it before Fact()
+        # so the contract's null rule is not tripped, and so it cannot erase
+        # an earlier observation.
+        if r.evidence.status == "unknown":
+            continue
         records.append((r.subject, f"relation:{r.predicate}:{r.object}",
                         Fact(attribute="description", value=f"{r.predicate} {r.object}",
                              evidence=r.evidence)))
@@ -52,14 +57,17 @@ class EvidenceMemory:
         for h in hypotheses:
             if not set(h.based_on_decisions) <= available:
                 raise ValueError("hypothesis references unknown decision evidence")
+        fresh = []
         for subject, attribute, fact in sorted(disclosed_records(frame), key=lambda r: (r[0], r[1])):
-            key = (subject, attribute)
             # Unknown now must not erase an earlier observation. It stays remembered.
             if fact.evidence.status == "unknown":
                 continue
-            self._records[key] = MemoryRecord(subject=subject, attribute=attribute, fact=fact,
-                                               last_decision=frame.decision_id,
-                                               last_turn=fact.evidence.turn)
+            fresh.append(MemoryRecord(subject=subject, attribute=attribute, fact=fact,
+                                      last_decision=frame.decision_id,
+                                      last_turn=fact.evidence.turn))
+        for record in fresh:
+            key = (record.subject, record.attribute)
+            self._records[key] = record
             self._records.move_to_end(key)
         while len(self._records) > self.max_records:
             self._records.popitem(last=False)
