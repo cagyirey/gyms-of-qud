@@ -9,8 +9,22 @@ from __future__ import annotations
 import secrets
 from dataclasses import dataclass
 
-from .contracts import (Action, AgentView, Cell, Destination, Entity, Event, Evidence,
-                        Fact, Frame, Layer, Position, Prompt, Relation, Zone)
+from .contracts import (
+    Action,
+    AgentView,
+    Cell,
+    Destination,
+    Entity,
+    Event,
+    Evidence,
+    Fact,
+    Frame,
+    Layer,
+    Position,
+    Prompt,
+    Relation,
+    Zone,
+)
 
 PRESETS = ("blade", "bow", "listener")
 
@@ -69,7 +83,6 @@ class ArenaFixture:
     def observe(self) -> Frame:
         t = self.turn
         self_ev = Evidence(channel="self", turn=t)
-        vision = Evidence(channel="vision", turn=t)
         pos = Position(zone="arena", x=self.x, y=self.y, evidence=self_ev)
         entities = [
             Entity(id="p", kind="actor", location=pos, facts=(fact("hp", 4, t), fact("max_hp", 4, t))),
@@ -124,7 +137,10 @@ class ArenaFixture:
             if self._contact and channel:
                 actions.append(Action(id="use", operation="fire" if self.preset == "bow" else "attack",
                                       source="ability", target=self._contact, label="Attempt attack", known_turn_cost=1))
-        return Frame(episode_id=self.episode, decision_id=f"d{self.sequence}", turn=t,
+        return Frame(episode_id=self.episode, branch_id=self.episode,
+                     decision_id=f"d{self.sequence}",
+                     parent_decision_id=None if self.sequence == 0 else f"d{self.sequence - 1}",
+                     turn=t,
                      phase="terminal" if self._terminal else "prompt" if self._pending else "command",
                      controlled_actor="p", zones=(Zone(id="arena", width=9, height=5, cells=cells),),
                      entities=tuple(entities), relations=tuple(relations), actions=tuple(actions),

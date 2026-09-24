@@ -7,6 +7,7 @@ Never construct a Frame from an unrestricted game-object dictionary.
 from __future__ import annotations
 
 from typing import Annotated, Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Ref = Annotated[str, Field(min_length=1, max_length=160)]
@@ -15,6 +16,14 @@ MemorySubject = Annotated[str, Field(min_length=1, max_length=175)]
 Text = Annotated[str, Field(max_length=8192)]
 Tick = Annotated[int, Field(ge=0, strict=True)]
 Scalar = str | int | float | bool | None
+MAX_FRAME_BYTES = 8 * 1024 * 1024
+MAX_ZONES = 16
+MAX_CELLS = 65_536
+MAX_ENTITIES = 4_096
+MAX_RELATIONS = 16_384
+MAX_EVENTS = 4_096
+MAX_ACTIONS = 4_096
+MAX_HYPOTHESES = 256
 
 
 class EyeModel(BaseModel):
@@ -75,7 +84,7 @@ class Entity(EyeModel):
     kind: Literal["actor", "contact", "item", "body_part", "ability", "effect",
                   "container", "faction", "quest", "landmark"]
     location: Position | None = None
-    facts: tuple[Fact, ...] = ()
+    facts: tuple[Fact, ...] = Field(default=(), max_length=128)
 
     @model_validator(mode="after")
     def unique_properties(self):
@@ -94,6 +103,12 @@ class Relation(EyeModel):
     object: Ref
     evidence: Evidence
 
+    @model_validator(mode="after")
+    def known_or_omitted(self):
+        if self.evidence.status == "unknown":
+            raise ValueError("unknown relations must be omitted")
+        return self
+
 
 class Layer(EyeModel):
     id: Ref
@@ -104,7 +119,7 @@ class Cell(EyeModel):
     x: Annotated[int, Field(ge=0, strict=True)]
     y: Annotated[int, Field(ge=0, strict=True)]
     # Multiple layers can coexist; omitted cells/layers mean unknown, never empty.
-    layers: tuple[Layer, ...]
+    layers: tuple[Layer, ...] = Field(max_length=32)
 
     @model_validator(mode="after")
     def nonempty(self):
@@ -119,7 +134,7 @@ class Zone(EyeModel):
     id: Ref
     width: Annotated[int, Field(gt=0, le=1024, strict=True)]
     height: Annotated[int, Field(gt=0, le=1024, strict=True)]
-    cells: tuple[Cell, ...] = ()
+    cells: tuple[Cell, ...] = Field(default=(), max_length=MAX_CELLS)
 
     @model_validator(mode="after")
     def valid_cells(self):
@@ -141,7 +156,13 @@ class Event(EyeModel):
     text: Text
     evidence: Evidence
     # Only references whose identity the permitted event actually establishes.
-    subjects: tuple[Ref, ...] = ()
+    subjects: tuple[Ref, ...] = Field(default=(), max_length=128)
+
+    @model_validator(mode="after")
+    def known_or_omitted(self):
+        if self.evidence.status == "unknown":
+            raise ValueError("unknown events must be omitted")
+        return self
 
 
 class Destination(EyeModel):
@@ -172,19 +193,25 @@ class Prompt(EyeModel):
 class Frame(EyeModel):
     schema_version: Literal["agent-eye/1"] = "agent-eye/1"
     episode_id: Ref
+    # A branch is an explicit active lineage. Restoring into a new branch
+    # requires rebuilding memory; a bounded decision cache is not lineage.
+    branch_id: Ref
     decision_id: Ref
+    parent_decision_id: Ref | None = None
     turn: Tick
     phase: Literal["creation", "command", "prompt", "terminal"]
     controlled_actor: Ref | None
-    zones: tuple[Zone, ...] = ()
-    entities: tuple[Entity, ...] = ()
-    relations: tuple[Relation, ...] = ()
-    events: tuple[Event, ...] = ()
+    zones: tuple[Zone, ...] = Field(default=(), max_length=MAX_ZONES)
+    entities: tuple[Entity, ...] = Field(default=(), max_length=MAX_ENTITIES)
+    relations: tuple[Relation, ...] = Field(default=(), max_length=MAX_RELATIONS)
+    events: tuple[Event, ...] = Field(default=(), max_length=MAX_EVENTS)
     prompt: Prompt | None = None
-    actions: tuple[Action, ...]
+    actions: tuple[Action, ...] = Field(max_length=MAX_ACTIONS)
 
     @model_validator(mode="after")
     def consistent(self):
+        if self.parent_decision_id == self.decision_id:
+            raise ValueError("a decision cannot be its own parent")
         ids = [e.id for e in self.entities]
         refs = set(ids)
         if len(ids) != len(refs):
@@ -195,6 +222,9 @@ class Frame(EyeModel):
             raise ValueError("duplicate actions")
         if len({e.id for e in self.events}) != len(self.events):
             raise ValueError("duplicate event handles")
+        relation_keys = [(r.subject, r.predicate, r.object) for r in self.relations]
+        if len(set(relation_keys)) != len(relation_keys):
+            raise ValueError("duplicate relation triples")
         if self.controlled_actor is not None:
             actor = next((e for e in self.entities if e.id == self.controlled_actor), None)
             if actor is None or actor.kind != "actor":
@@ -236,6 +266,8 @@ class Frame(EyeModel):
         # 'observed' in a Frame means current observation, not a stale engine cache.
         if any(e.status == "observed" and e.turn != self.turn for e in evidence):
             raise ValueError("past observations belong in memory, not current perception")
+        if len(self.model_dump_json()) > MAX_FRAME_BYTES:
+            raise ValueError("frame exceeds the aggregate byte budget")
         return self
 
 
@@ -256,7 +288,7 @@ class Hypothesis(EyeModel):
     """Optional model output, deliberately NOT a Fact. Scores are not calibrated probabilities."""
     id: Ref
     text: Text
-    based_on_decisions: tuple[Ref, ...] = Field(min_length=1)
+    based_on_decisions: tuple[Ref, ...] = Field(min_length=1, max_length=MAX_HYPOTHESES)
     model: Ref
     score: float | None = None
 
@@ -264,9 +296,9 @@ class Hypothesis(EyeModel):
 class AgentView(EyeModel):
     schema_version: Literal["agent-view/1"] = "agent-view/1"
     current: Frame
-    remembered: tuple[MemoryRecord, ...] = ()
-    hypotheses: tuple[Hypothesis, ...] = ()
-    remembered_events: tuple[EventMemory, ...] = ()
+    remembered: tuple[MemoryRecord, ...] = Field(default=(), max_length=4096)
+    hypotheses: tuple[Hypothesis, ...] = Field(default=(), max_length=MAX_HYPOTHESES)
+    remembered_events: tuple[EventMemory, ...] = Field(default=(), max_length=4096)
     forgotten_events: Tick = 0
     forgotten_records: Tick = 0
 
@@ -274,6 +306,8 @@ class AgentView(EyeModel):
     def no_future_memory(self):
         if any(m.event.evidence.turn > self.current.turn for m in self.remembered_events):
             raise ValueError("event memory from a future branch is forbidden")
+        if any(m.last_turn != m.fact.evidence.turn for m in self.remembered):
+            raise ValueError("memory provenance turn does not match its evidence")
         if any(m.last_turn > self.current.turn for m in self.remembered):
             raise ValueError("memory from a future branch is forbidden")
         return self

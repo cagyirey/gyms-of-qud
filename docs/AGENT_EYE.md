@@ -19,8 +19,9 @@ qudgym eye-builds builds/library.json
 Open the generated HTML in a browser. It is self-contained: no CDN, model server,
 remote assets, telemetry, or network fetches. Output files are create-only. The
 viewer accepts **agent-eye-trace/1**, not the older research-trajectory JSONL, which
-contains control metadata such as seeds. Never pass raw trajectory envelopes as
-model observations.
+contains control metadata such as seeds. A trace is an untrusted playback artifact,
+not an attestation of provenance or a Qud evaluation; `is_mock` is only a display
+hint. Never pass raw trajectory envelopes as model observations.
 
 The demo presets `blade`, `bow`, and `listener` are deliberately synthetic. Their
 ranges, perception rules, costs and cooldowns are NOT claims about Caves of Qud.
@@ -31,8 +32,11 @@ hypothesis** illustrates non-authoritative model output; no model generated it.
 ## Contract boundaries
 
 `src/qudgym/eye/contracts.py` is the source of truth. `eye-schema` exports JSON
-Schemas as build artifacts. The new `agent-eye/1` frame and `agent-view/1` policy
-view coexist with controller RPC **0.1**; this is not a silent wire upgrade.
+Schemas as build artifacts. The exported schemas describe field shapes; the
+versioned Python runtime validator remains authoritative for cross-field lineage,
+reference, evidence, and aggregate-budget checks. The new `agent-eye/1` frame and
+`agent-view/1` policy view coexist with controller RPC **0.1**; this is not a
+silent wire upgrade.
 
 ```
 permitted player information -> Frame -> EvidenceMemory -> AgentView
@@ -61,9 +65,11 @@ without disclosing identity. Sensory channel names are vocabulary, not implement
 or verified Qud sensory rules.
 
 Relations bind carried items, anatomy, equipment, abilities, effects and known
-connections. All references must resolve within the supplied frame. Event text is
-retained; the model does not have to rely on an exhaustive hand-authored event enum.
-The engine's hidden GUID or blueprint must not be used as a policy-facing handle.
+connections. All references must resolve within the supplied frame. Unknown
+relations and events are rejected/omitted rather than serialized with endpoints,
+predicates or text that could disclose the hidden fact. Event text is retained;
+the model does not have to rely on an exhaustive hand-authored event enum. The
+engine's hidden GUID or blueprint must not be used as a policy-facing handle.
 The `cell:` handle prefix is reserved for internal terrain-memory keys.
 
 ### Remembered evidence and hypotheses
@@ -77,7 +83,10 @@ stays in the **remembered** section, not in the current contact record.
 Retention is bounded (default 4096 fact records, 256 events and 256 decision IDs),
 and evictions are counted. Eviction or omission is NOT a claim that an object was
 destroyed. Explicit negative observations can be represented as observed facts or
-messages; no absence-based deletion heuristic is implemented.
+messages; no absence-based deletion heuristic is implemented. Observed and
+reported claims are retained separately, so an older report cannot overwrite a
+newer direct observation. Frame cardinality and aggregate byte budgets bound the
+materialized view before it reaches a model or replay file.
 
 Hypotheses are separate objects with supporting decision references and a model
 label. They cannot overwrite facts; scores, when supplied, are not asserted to be
@@ -86,11 +95,14 @@ included. The synthetic arena assigns a fresh contact handle after losing and
 reacquiring a contact, instead of using engine identity to solve reidentification.
 Its continuity between sight and hearing is a fixture assumption, not a Qud rule.
 
-Repeated identical decisions are idempotent. Changed payloads on retained cursors
-are rejected. Reset is explicit between episodes. Backward game time is rejected:
-a TAS branch must restore/rebuild the agent's observation history as well as the
-simulator. This milestone does not implement policy-memory snapshot/fork support.
-The retained cursor cache is bounded, not an unbounded exactly-once history.
+Repeated identical decisions are idempotent. Every frame carries an explicit
+branch ID and parent decision ID. A same-turn prompt is valid only when it names
+the active parent; changing branches requires an explicit memory rebuild. Changed
+payloads on retained cursors are rejected. Reset is explicit between episodes.
+Backward game time is rejected: a TAS branch must restore/rebuild the agent's
+observation history as well as the simulator. This milestone does not implement
+policy-memory snapshot/fork support. The retained cursor cache is bounded, not
+an unbounded exactly-once history.
 
 ### Grounded actions and encoding
 
@@ -153,8 +165,11 @@ pinned NeMo checkout. The recipe still references your existing `policy_model`.
 
 The policy receives `current.actions` and `current.decision_id`, but returns the
 same `{"action_id":"...","decision_id":"..."}` selection. A presenter and its
-memory belong to each session and are released with that session. Invalid-action
-retries do not append duplicate memory. The legacy converter uses ONLY the already
+memory belong to each session and are released with that session. Step request IDs
+use a bounded typed cache for both committed transitions and policy errors; a
+presentation failure after commit faults the worker instead of silently stepping
+again. Reset identities include the selected representation. Invalid-action retries
+do not append duplicate memory. The legacy converter uses ONLY the already
 sanitized corridor observation, preserves known movement offsets, and refuses
 unmapped action metadata rather than silently discarding it. It cannot manufacture
 anatomy or sensory details absent from the old protocol. The richer arena is NOT

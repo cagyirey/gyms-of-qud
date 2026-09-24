@@ -2,4 +2,4 @@
 from .contracts import AgentView, Frame
 from .memory import EvidenceMemory
 
-__all__ = ["AgentView", "Frame", "EvidenceMemory"]
+__all__ = ["AgentView", "EvidenceMemory", "Frame"]

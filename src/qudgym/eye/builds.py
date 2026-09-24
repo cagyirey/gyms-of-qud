@@ -1,7 +1,9 @@
 """Metadata for a human-curated preset library; no guessed Qud creation API."""
 from pathlib import Path
 from typing import Literal
+
 from pydantic import model_validator
+
 from .contracts import EyeModel, Ref, Text
 
 

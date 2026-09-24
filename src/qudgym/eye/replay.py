@@ -4,8 +4,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Literal
+
 from pydantic import model_validator
-from .contracts import AgentView, EyeModel, Ref
+
+from .contracts import AgentView, EyeModel, Frame, Ref
 
 MAX_BYTES = 32 * 1024 * 1024
 MAX_RECORDS = 2048
@@ -44,17 +46,23 @@ def read_trace(path: str | Path) -> list[Record]:
     # splitlines() also breaks on U+2028, U+2029 and U+0085, which JSON leaves
     # raw inside strings. Records are delimited only by the newline we wrote.
     text = raw.decode("utf-8")
-    if text.endswith("\n"):
-        text = text[:-1]
+    text = text.removesuffix("\n")
     lines = text.split("\n") if text else []
     if not 1 <= len(lines) <= MAX_RECORDS or any(not line.strip() for line in lines):
         raise ValueError("trace must contain 1..2048 nonempty records")
     records = [Record.model_validate_json(line) for line in lines]
-    previous = None
-    decisions = set()
+    previous: Frame | None = None
+    branch_id: str | None = None
+    decisions: set[str] = set()
     for record in records:
         frame = record.view.current
-        if previous and (frame.episode_id != previous.episode_id or frame.turn < previous.turn):
+        if previous is None:
+            if frame.parent_decision_id is not None:
+                raise ValueError("trace must begin at a root decision")
+            branch_id = frame.branch_id
+        elif (frame.episode_id != previous.episode_id or frame.branch_id != branch_id
+              or frame.parent_decision_id != previous.decision_id
+              or frame.turn < previous.turn):
             raise ValueError("one trace represents one forward episode branch")
         if frame.decision_id in decisions:
             raise ValueError("duplicate decision in trace")
@@ -113,7 +121,7 @@ function ev(e){return e.status+' via '+e.channel+' · turn '+e.turn;}
 function value(f){return f.value===null?'UNKNOWN':String(f.value)+(f.unit?' '+f.unit:'');}
 function location(p){return p.zone+' ('+p.x+','+p.y+')';}
 function draw(){const r=rows[index],v=r.view,f=v.current;el('seek').value=index;
-el('origin').textContent=r.is_mock?'SYNTHETIC FIXTURE — not a Qud playthrough':'Recorded agent observation';
+el('origin').textContent=r.is_mock?'SYNTHETIC FIXTURE — not a Qud playthrough':'UNVERIFIED TRACE — not evidence of a Qud playthrough';
 el('cursor').textContent='Decision '+index+' / '+(rows.length-1)+' · turn '+f.turn+' · '+f.phase;
 el('prev').disabled=index===0;el('next').disabled=index===rows.length-1;
 const old=el('zones').value;clear('zones');for(const z of f.zones){const o=document.createElement('option');o.value=z.id;o.textContent=z.id;el('zones').appendChild(o);}if(f.zones.some(z=>z.id===old))el('zones').value=old;
@@ -130,7 +138,8 @@ el('raw').textContent=JSON.stringify(v,null,2);drawMap();}
 function drawMap(){const v=rows[index].view,f=v.current,z=f.zones.find(z=>z.id===el('zones').value),c=el('map'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);layout=null;if(!z)return;
 const s=Math.min(c.width/z.width,c.height/z.height),ox=(c.width-z.width*s)/2,oy=(c.height-z.height*s)/2;layout={z,s,ox,oy};
 function tile(x,y,txt,color){ctx.fillStyle=color;ctx.fillRect(ox+x*s+1,oy+y*s+1,Math.max(1,s-2),Math.max(1,s-2));if(s>=12){ctx.fillStyle='#dce5ef';ctx.font=Math.min(22,s*.55)+'px monospace';ctx.textAlign='center';ctx.fillText(txt,ox+(x+.5)*s,oy+(y+.68)*s);}}
-function glyphLayer(layers){return layers.find(l=>l.id==='terrain'||l.id==='ground'||l.id==='glyph'||(l.fact&&(l.fact.attribute==='terrain'||l.fact.attribute==='glyph')))||layers.find(l=>l);}
+function layerRank(l){if(l.id==='terrain'||(l.fact&&l.fact.attribute==='terrain'))return 3;if(l.id==='ground'||l.id==='layer:ground')return 2;if(l.id==='glyph'||(l.fact&&l.fact.attribute==='glyph'))return 1;return 0;}
+function glyphLayer(layers){let best=layers[0],rank=layerRank(best);for(const l of layers){const n=layerRank(l);if(n>rank){best=l;rank=n;}}return best;}
 function glyphRank(m){if(m.attribute==='layer:terrain'||(m.fact&&m.fact.attribute==='terrain'))return 3;if(m.attribute==='layer:ground')return 2;if(m.attribute==='layer:glyph'||(m.fact&&m.fact.attribute==='glyph'))return 1;return 0;}
 if(el('memory').checked){const painted=new Map();for(const m of v.remembered){const prefix='cell:'+z.id+':';const rank=glyphRank(m);if(!rank||!m.subject.startsWith(prefix))continue;const xy=m.subject.slice(prefix.length).split(':').map(Number);if(xy.length!==2||xy.some(n=>!Number.isFinite(n))||xy[0]>=z.width||xy[1]>=z.height)continue;const key=xy[0]+','+xy[1];if((painted.get(key)||0)>=rank)continue;painted.set(key,rank);tile(xy[0],xy[1],String(m.fact.value??'?').slice(0,1),'#54432c');}}
 for(const cell of z.cells){const p=glyphLayer(cell.layers).fact;tile(cell.x,cell.y,String(p.value??'?').slice(0,1),'#2b4b48');}

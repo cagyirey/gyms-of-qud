@@ -1,9 +1,10 @@
 """CLI entrypoints kept separate from the native controller."""
 import json
 from pathlib import Path
+
 from .builds import BuildLibrary, load_library
-from .contracts import AgentView, Frame, Hypothesis
-from .fixtures import ArenaFixture, CapabilityScorer, PRESETS
+from .contracts import AgentView, Hypothesis
+from .fixtures import PRESETS, ArenaFixture, CapabilityScorer
 from .memory import EvidenceMemory
 from .replay import Record, read_trace, render_html, write_trace
 
