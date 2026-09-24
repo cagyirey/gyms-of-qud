@@ -41,12 +41,14 @@ def from_observation(observation: Observation) -> Frame:
     width = min(_ZONE, max((len(row) for row in rows), default=0))
     height = len(rows)
     if width < 1 or height < 1:
-        width, height = 1, 1
+        width = height = 0
         rows = ()
     cells = tuple(Cell(x=x, y=y, layers=(Layer(id="glyph", fact=Fact(
         attribute="glyph", value=c, evidence=vision)),))
         for y, row in enumerate(rows) for x, c in enumerate(row[:width]) if c != "?")
-    zones = (Zone(id=zone_id, width=width, height=height, cells=cells),)
+    zones = () if not width or not height else (
+        Zone(id=zone_id, width=width, height=height, cells=cells),
+    )
 
     def place(x: int, y: int, evidence: Evidence) -> Position | None:
         if not _inside(x, y, width, height):

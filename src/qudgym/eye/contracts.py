@@ -31,8 +31,10 @@ class Evidence(EyeModel):
 
     @model_validator(mode="after")
     def unknown_channel(self):
-        if (self.status == "unknown") != (self.channel == "unknown"):
-            raise ValueError("unknown evidence requires unknown channel, and vice versa")
+        if self.status == "unknown" and self.channel != "unknown":
+            raise ValueError("unknown evidence requires unknown channel")
+        if self.channel == "unknown" and self.status != "unknown":
+            raise ValueError("unknown channel requires unknown evidence status")
         return self
 
 
