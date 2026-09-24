@@ -20,8 +20,16 @@ def main():
     serve.add_argument("--oracle", action="store_true", help="Enable privileged search APIs")
     schema = commands.add_parser("schema", help="Export JSON schemas")
     schema.add_argument("--output", type=Path, default=Path("schemas"))
+    from .eye.cli import add_commands
+    add_commands(commands)
     args = parser.parse_args()
-    if args.command == "smoke":
+    if args.command.startswith("eye-"):
+        from .eye.cli import run
+        try:
+            run(args)
+        except (ValueError, OSError) as exc:
+            parser.error(str(exc))
+    elif args.command == "smoke":
         with QudEnv(MockBackend()) as env:
             recorder = TrajectoryRecorder(env, args.record) if args.record else None
             driver = recorder or env
