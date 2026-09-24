@@ -1,0 +1,31 @@
+# First live-install handoff
+
+A local Steam install of build 2.0.211.55 was used to load `mod/QudGym`. That mod only reports hook types and the thread it was called on. It does not observe, step, or reset a game. No full-state capture or turn throughput has been established.
+
+## Information to provide
+
+Run `scripts/collect_install_info.py` as shown in the README, provide the exact in-game version/build, and identify the enabled mods/load order. The generated JSON is useful for compatibility targeting; it does not contain API signatures or detect the build automatically. Keep it in ignored `local/` until reviewed.
+
+No DLL uploads or saves are necessary at this stage. For the next patch, a locally generated compile-error excerpt or a narrowly scoped method-signature report may be needed. Do not upload whole game installations, decompiled source dumps, private logs, or personal save games.
+
+## What the C# scaffold does
+
+`bridge/QudGym.BridgeCore` is an engine-neutral queue and decision-boundary handoff. Network callers enqueue typed action selections. The owning game-turn thread begins them and completes a task with an immutable serialized observation at a resolved boundary. It checks thread ownership, stale cursors, pre-dispatch cancellation, queue capacity, and fault/reconciliation behavior. Post-dispatch cancellation does not pretend to undo an applied command.
+
+The `netstandard2.1` target is a provisional standalone library target, NOT a claim about the installed Qud compiler/runtime. Confirm the local mod target before choosing whether to compile this as a referenced assembly or adapt its source to the mod compiler.
+
+`mod/QudGym` is the loadable script mod: `manifest.json` plus `Diagnostic.cs`, which the game compiles. It has no player mutator attached, HTTP listener, input injection, visible-state extractor, or save adapter. The queue library is still not a mod. Its test project can be compiled independently with .NET 10 and requires no game DLLs:
+
+```bash
+dotnet run --project bridge/QudGym.BridgeCore.SmokeTests -c Release
+```
+
+## Integration order
+
+First add a read-only diagnostic mod, checked against the exact local build. Record event thread IDs and availability of turn/input hooks without changing game state. Inspect APIs locally for observation, current prompts, pending commands and save lifecycle.
+
+Next implement a visible-state projection and a *small* supported action registry: cardinal movement, wait, a simple menu choice. Bind network work to a proven game-input boundary. Qud can block inside input/prompt handling, so merely waiting for an event that cannot fire until input arrives is a deadlock. Resolve off-turn actions and prompts explicitly; an event subscription is not sufficient.
+
+Only then add controlled scenario reset from a dedicated test character/profile. Never run reset/save experiments against the user's only copy of a real run. Do not assume the OS supports cheap process fork, or that Unity state is fork-safe.
+
+Snapshot research comes after correct stepping. Enumerate all PRNGs, scheduler queues, world/zone caches, pending effects, save-incomplete state and external configuration. Include game build and enabled-mod fingerprints in snapshot metadata. Enable deterministic restore only after repeated stochastic branch→restore→replay checks agree; keep capabilities disabled otherwise.

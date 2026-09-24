@@ -1,0 +1,212 @@
+{
+  "$defs": {
+    "HashState": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "state_hash",
+          "default": "state_hash",
+          "title": "Op",
+          "type": "string"
+        }
+      },
+      "title": "HashState",
+      "type": "object"
+    },
+    "Hello": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "hello",
+          "default": "hello",
+          "title": "Op",
+          "type": "string"
+        }
+      },
+      "title": "Hello",
+      "type": "object"
+    },
+    "Observe": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "observe",
+          "default": "observe",
+          "title": "Op",
+          "type": "string"
+        }
+      },
+      "title": "Observe",
+      "type": "object"
+    },
+    "Release": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "release",
+          "default": "release",
+          "title": "Op",
+          "type": "string"
+        },
+        "handle": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Handle",
+          "type": "string"
+        }
+      },
+      "required": [
+        "handle"
+      ],
+      "title": "Release",
+      "type": "object"
+    },
+    "Reset": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "reset",
+          "default": "reset",
+          "title": "Op",
+          "type": "string"
+        },
+        "seed": {
+          "default": 0,
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        }
+      },
+      "title": "Reset",
+      "type": "object"
+    },
+    "Restore": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "restore",
+          "default": "restore",
+          "title": "Op",
+          "type": "string"
+        },
+        "handle": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Handle",
+          "type": "string"
+        }
+      },
+      "required": [
+        "handle"
+      ],
+      "title": "Restore",
+      "type": "object"
+    },
+    "Snapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "snapshot",
+          "default": "snapshot",
+          "title": "Op",
+          "type": "string"
+        }
+      },
+      "title": "Snapshot",
+      "type": "object"
+    },
+    "Step": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "step",
+          "default": "step",
+          "title": "Op",
+          "type": "string"
+        },
+        "decision_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "action_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision_id",
+        "action_id"
+      ],
+      "title": "Step",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {
+      "const": "0.1",
+      "default": "0.1",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "request_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Request Id",
+      "type": "string"
+    },
+    "operation": {
+      "discriminator": {
+        "mapping": {
+          "hello": "#/$defs/Hello",
+          "observe": "#/$defs/Observe",
+          "release": "#/$defs/Release",
+          "reset": "#/$defs/Reset",
+          "restore": "#/$defs/Restore",
+          "snapshot": "#/$defs/Snapshot",
+          "state_hash": "#/$defs/HashState",
+          "step": "#/$defs/Step"
+        },
+        "propertyName": "op"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Hello"
+        },
+        {
+          "$ref": "#/$defs/Reset"
+        },
+        {
+          "$ref": "#/$defs/Observe"
+        },
+        {
+          "$ref": "#/$defs/Step"
+        },
+        {
+          "$ref": "#/$defs/Snapshot"
+        },
+        {
+          "$ref": "#/$defs/Restore"
+        },
+        {
+          "$ref": "#/$defs/Release"
+        },
+        {
+          "$ref": "#/$defs/HashState"
+        }
+      ],
+      "title": "Operation"
+    }
+  },
+  "required": [
+    "request_id",
+    "operation"
+  ],
+  "title": "RpcRequest",
+  "type": "object"
+}

@@ -1,0 +1,31 @@
+name: foundation
+on:
+  pull_request:
+  push:
+    branches: [main, feat/qudgym-foundation]
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m pytest -q
+      - run: qudgym smoke
+      - run: python examples/branch_and_replay.py
+      - run: python -m compileall -q src scripts integrations
+  bridge-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project bridge/QudGym.BridgeCore.SmokeTests -c Release

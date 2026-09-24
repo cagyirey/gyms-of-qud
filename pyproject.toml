@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qudgym"
+version = "0.1.0"
+description = "Decision-boundary environment foundations for Caves of Qud agents and TAS research"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.11,<3"]
+
+[project.optional-dependencies]
+server = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
+live = ["websockets>=13,<16"]
+dev = ["pytest>=8,<10", "httpx>=0.27,<1", "fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
+
+[project.scripts]
+qudgym = "qudgym.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"

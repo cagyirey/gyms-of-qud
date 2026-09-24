@@ -1,0 +1,229 @@
+{
+  "$defs": {
+    "CandidateAction": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "move",
+            "wait",
+            "answer",
+            "interact",
+            "ability",
+            "inventory"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "arguments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Arguments",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "label"
+      ],
+      "title": "CandidateAction",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "PerceivedEntity": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "x": {
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "title": "Y",
+          "type": "integer"
+        },
+        "perceived_status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Perceived Status"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "x",
+        "y"
+      ],
+      "title": "PerceivedEntity",
+      "type": "object"
+    },
+    "Player": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "title": "Y",
+          "type": "integer"
+        },
+        "hp": {
+          "minimum": 0,
+          "title": "Hp",
+          "type": "integer"
+        },
+        "max_hp": {
+          "exclusiveMinimum": 0,
+          "title": "Max Hp",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "hp",
+        "max_hp"
+      ],
+      "title": "Player",
+      "type": "object"
+    },
+    "Prompt": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "choice",
+            "direction",
+            "target",
+            "text"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "title": "Prompt",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "episode_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Episode Id",
+      "type": "string"
+    },
+    "decision_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "turn": {
+      "minimum": 0,
+      "title": "Turn",
+      "type": "integer"
+    },
+    "phase": {
+      "enum": [
+        "command",
+        "prompt",
+        "terminal"
+      ],
+      "title": "Phase",
+      "type": "string"
+    },
+    "player": {
+      "$ref": "#/$defs/Player"
+    },
+    "tiles": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tiles",
+      "type": "array"
+    },
+    "entities": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PerceivedEntity"
+      },
+      "title": "Entities",
+      "type": "array"
+    },
+    "messages": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Messages",
+      "type": "array"
+    },
+    "prompt": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Prompt"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "actions": {
+      "items": {
+        "$ref": "#/$defs/CandidateAction"
+      },
+      "title": "Actions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "episode_id",
+    "decision_id",
+    "turn",
+    "phase",
+    "player",
+    "tiles",
+    "actions"
+  ],
+  "title": "Observation",
+  "type": "object"
+}

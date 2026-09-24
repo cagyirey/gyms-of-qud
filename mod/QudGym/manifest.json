@@ -1,0 +1,8 @@
+{
+  "ID": "QudGym",
+  "Title": "QudGym",
+  "Description": "Decision-boundary controller for Gyms of Qud. This revision only reports that the mod loaded and which hooks exist.",
+  "Version": "0.1.0",
+  "Author": "QudGym",
+  "Tags": "Script"
+}

@@ -1,0 +1,63 @@
+{
+  "gameversion": "2.0.211.55",
+  "buildversion": "1.0.0",
+  "modules": [
+    {
+      "moduleType": "XRL.CharacterBuilds.Qud.QudGenotypeModule, Assembly-CSharp, Version=2.0.211.55, Culture=neutral, PublicKeyToken=null",
+      "data": {
+        "$type": "XRL.CharacterBuilds.Qud.QudGenotypeModuleData, Assembly-CSharp",
+        "Genotype": "True Kin",
+        "version": "1.0.0"
+      }
+    },
+    {
+      "moduleType": "XRL.CharacterBuilds.Qud.QudSubtypeModule, Assembly-CSharp, Version=2.0.211.55, Culture=neutral, PublicKeyToken=null",
+      "data": {
+        "$type": "XRL.CharacterBuilds.Qud.QudSubtypeModuleData, Assembly-CSharp",
+        "Subtype": "Artifex",
+        "version": "1.0.0"
+      }
+    },
+    {
+      "moduleType": "XRL.CharacterBuilds.Qud.QudAttributesModule, Assembly-CSharp, Version=2.0.211.55, Culture=neutral, PublicKeyToken=null",
+      "data": {
+        "$type": "XRL.CharacterBuilds.Qud.QudAttributesModuleData, Assembly-CSharp",
+        "PointsPurchased": {
+          "Strength": 4,
+          "Agility": 6,
+          "Toughness": 5,
+          "Intelligence": 10,
+          "Willpower": 4,
+          "Ego": 5
+        },
+        "apSpent": -38,
+        "apRemaining": 0,
+        "baseAp": 38,
+        "version": "1.0.0"
+      }
+    },
+    {
+      "moduleType": "XRL.CharacterBuilds.Qud.QudCyberneticsModule, Assembly-CSharp, Version=2.0.211.55, Culture=neutral, PublicKeyToken=null",
+      "data": {
+        "$type": "XRL.CharacterBuilds.Qud.QudCyberneticsModuleData, Assembly-CSharp",
+        "lp": -1,
+        "selections": [
+          {
+            "Cybernetic": "NightVision",
+            "Count": 1,
+            "Variant": "Face"
+          }
+        ],
+        "version": "1.0.0"
+      }
+    },
+    {
+      "moduleType": "XRL.CharacterBuilds.Qud.QudChooseStartingLocationModule, Assembly-CSharp, Version=2.0.211.55, Culture=neutral, PublicKeyToken=null",
+      "data": {
+        "$type": "XRL.CharacterBuilds.Qud.QudChooseStartingLocationModuleData, Assembly-CSharp",
+        "StartingLocation": "Joppa",
+        "version": "1.0.0"
+      }
+    }
+  ]
+}
