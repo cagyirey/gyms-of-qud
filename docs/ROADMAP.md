@@ -12,7 +12,7 @@ Expose stable player/visible entity IDs, perceived tiles, messages, prompts and 
 
 ## 3. Connect primitive actions to resolved boundaries
 
-Implement move/wait/prompt-choice and the actual C# wire host. Acceptance: one accepted request maps to one consumed input; zero-turn actions get fresh cursors; nested prompts, failed moves, focus loss, queued cancellations and lost replies do not double-step or deadlock. Validate the transport against the committed JSON schemas. Port the reference deduplication semantics; BoundaryQueue alone is not a complete RPC server.
+Implement move/wait/prompt-choice and the actual C# wire host. Keep the transport host outside the game-turn state machine; do not embed a hand-written web server in the F# game library or wait on unbounded client tasks from the turn thread. Acceptance: one accepted request maps to one consumed input; zero-turn actions get fresh cursors; nested prompts, failed moves, focus loss, queued cancellations and lost replies do not double-step or deadlock. Validate the transport against the committed JSON schemas. Port the reference deduplication semantics; BoundaryQueue alone is not a complete RPC server.
 
 ## 4. Add safe scenario reset and trajectory capture
 
