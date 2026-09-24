@@ -39,6 +39,6 @@ inference, or native NeMo rollout was executed. Generic schema validation does n
 prove that a future game adapter sources its facts fairly. These tests constrain
 the synthetic producer and the shared evidence/presentation machinery.
 
-The baseline foundation PR's previously completed GitHub Actions run was observed
-as successful. New branch CI is independent and must be checked after publication;
-this file does not predeclare it green. C# code was not changed in this milestone.
+Fresh branch GitHub Actions passed all five jobs: Python 3.11/3.12/3.13,
+BridgeCore on .NET 10, and the Chromium replay smoke test. C# source was not
+changed in this milestone.
