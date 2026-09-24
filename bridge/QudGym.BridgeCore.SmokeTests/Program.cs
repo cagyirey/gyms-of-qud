@@ -11,6 +11,12 @@ static class Program
     static void Main()
     {
         using var queue = new BoundaryQueue(2);
+        bool rejectedBeforeInitialization = Task.Run(() => {
+            try { queue.TryBeginOnTurnThread("d1", out _); return false; }
+            catch (InvalidOperationException) { return true; }
+        }).GetAwaiter().GetResult();
+        Check(rejectedBeforeInitialization, "Queue must require explicit turn-thread initialization");
+        queue.InitializeTurnThread();
         var result = queue.Submit("r1", "d1", "move:E");
         Check(!result.IsCompleted, "Enqueue must not execute game logic");
         Check(queue.TryBeginOnTurnThread("d1", out var command), "Expected pending input");
