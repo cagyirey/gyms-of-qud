@@ -3,29 +3,33 @@
 ## Executed on the rebased branch
 
 - Python 3.13.5, Pydantic 2.13.4. Installed editable with local dependencies.
-- `python -m pytest -q`: **129 passed** (68 foundation + 61 agent-eye tests).
+- `python -m pytest -q`: **141 passed** (72 foundation + 69 agent-eye tests).
 - All three synthetic arena demos terminate after disabling the practice target.
 - `python -m compileall -q src scripts integrations`: passed.
 - `qudgym smoke`, `python examples/branch_and_replay.py`, and the .NET 10
   `BridgeCore` smoke test passed.
-- The browser smoke test was not rerun locally because this checkout does not
-  have Playwright/Chromium installed. The pre-rebase browser run passed, but
-  the rebased PR must rely on a fresh CI browser job for confirmation.
+- Browser smoke was not rerun locally because this checkout does not have
+  Playwright/Chromium installed; the fresh GitHub Actions browser job passed
+  for the rebased commit.
 
 ## What the new tests establish
 
 Fixture-level noninterference for unobserved location/property changes (including
 candidates); no live updates to remembered contacts; location-vs-identity sensory
 disclosure; new handles on contact reacquisition; known-zero-vs-unknown validation;
-provenance/timestamp checks; bounded memory/events and explicit evictions; atomic
-memory failure handling; no hypothesis promotion to observed facts; idempotence,
-episode separation and rewind rejection; reference integrity; entity/candidate
-permutation and diagnostic scorer handle-renaming invariance; zero-time prompts
-preserving cooldowns/resources; bounded legacy conversion without inventing empty
-zones; trace JSONL round trips, unsupported versions and invalid recorded actions;
-HTML/script-breakout escaping, text-only DOM sinks and blocked external requests;
-lossless canonical text/structured views; per-session presenter isolation; build
-library shape checks; CLI and JSON Schema export.
+strict unknown-channel handling; provenance/timestamp checks; explicit branch and
+parent lineage across same-turn prompts; bounded memory/events and explicit
+evictions; atomic memory failure handling; observed/reported claim separation;
+unknown relation/event omission; aggregate frame/view budgets; no hypothesis
+promotion to observed facts; idempotence, episode separation and rewind rejection;
+reference integrity; entity/candidate permutation and diagnostic scorer
+handle-renaming invariance; zero-time prompts preserving cooldowns/resources;
+bounded legacy conversion without inventing empty zones; trace JSONL round trips,
+unsupported versions and invalid recorded actions; HTML/script-breakout escaping,
+text-only DOM sinks and blocked external requests; lossless canonical text/structured
+views; per-session presenter isolation; build library shape checks; CLI and JSON
+Schema export. NeMo adapter tests also cover typed step-cache replay for policy
+errors, presentation faults, and reset-cookie collisions.
 
 ## Not established
 
