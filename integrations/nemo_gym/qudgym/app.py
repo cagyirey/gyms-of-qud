@@ -242,7 +242,7 @@ class QudGymServer(GymnasiumServer):
                 'internal': internal, 'attempts': 0, 'limit': spec.max_decisions,
                 'presenter': presenter, 'faulted': False,
             }
-            self.session_state[session_id] = cast(dict[str, object], state)
+            self.session_state[session_id] = state
             internal = None
             info: ResetInfo = {
                 'is_mock': True, 'representation': spec.representation,
@@ -300,10 +300,15 @@ class QudGymServer(GymnasiumServer):
                 return self._policy_reply(session_id, state, exc.code, request_id, fingerprint)
             raise HTTPException(410 if exc.code == 'session_missing' else 500, exc.code) from exc
         capped = state['attempts'] >= state['limit'] and not result.terminated
-        info = cast(StepInfo, {
+        info: StepInfo = {
             'is_mock': True, 'representation': state['presenter'].representation,
-            **result.metrics.model_dump(mode='json'), 'agent_attempts': state['attempts'],
-        })
+            'task_id': result.metrics.task_id,
+            'objective_version': result.metrics.objective_version,
+            'outcome': result.metrics.outcome,
+            'turns_elapsed': result.metrics.turns_elapsed,
+            'decisions_elapsed': result.metrics.decisions_elapsed,
+            'agent_attempts': state['attempts'],
+        }
         if capped and not result.truncated:
             info['outcome'] = 'agent_attempt_limit'
         try:
