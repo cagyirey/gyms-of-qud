@@ -99,7 +99,7 @@ python scripts/collect_install_info.py '/path/to/Caves of Qud' \
   --output local/qud-install.json
 ```
 
-Optionally add `--mods-dir '/path/to/Mods'`. Review the resulting JSON before sharing. It contains OS/architecture, selected assembly names/sizes/SHA-256 hashes, and optional mod metadata—**not** assembly bytes, saves, absolute install paths or credentials. State which mods are actually enabled and their load order separately. See [local integration](docs/LOCAL_INTEGRATION.md).
+Optionally add `--mods-dir '/path/to/Mods'`. Review the resulting JSON before sharing. It contains OS/architecture, selected assembly names/sizes/SHA-256 hashes, and optional mod metadata—**not** assembly bytes, saves, absolute install paths or credentials. Validate the redacted manifest with `qudgym compat-validate local/qud-install.json --kind manifest`. See the [compatibility evidence workflow](docs/COMPATIBILITY.md) and [local integration](docs/LOCAL_INTEGRATION.md).
 
 ## Contribute through a pull request
 
@@ -114,6 +114,7 @@ See [publication notes](docs/PUBLISH.md). No local game data belongs in commits.
 ## Design and next implementation work
 
 - [Protocol and invariants](docs/PROTOCOL.md)
+- [Compatibility evidence workflow](docs/COMPATIBILITY.md)
 - [Live Qud integration checklist](docs/LOCAL_INTEGRATION.md)
 - [Implementation backlog](docs/ROADMAP.md)
 - [Primary-source inspection record](docs/SOURCES.md)

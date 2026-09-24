@@ -4,7 +4,7 @@ These are issue-ready work items, not remotely created GitHub issues.
 
 ## 1. Establish the installed-game compatibility target
 
-Input: reviewed install manifest, exact build, enabled mods/load order. Add a minimal local diagnostic mod and a dedicated test profile. Acceptance: it loads and reports build, candidate hook availability and hook thread IDs without save modifications. Record API evidence; do not infer support from Raves' older build.
+Input: reviewed install manifest, exact build, enabled mods/load order. Validate the redacted manifest/report with the typed compatibility contract, then add a minimal local diagnostic mod and a dedicated test profile. Acceptance: it loads and reports build, candidate hook availability and hook thread IDs without save modifications. Record API evidence; do not infer support from Raves' older build.
 
 ## 2. Implement read-only player-observation projection
 
