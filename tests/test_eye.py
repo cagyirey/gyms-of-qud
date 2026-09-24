@@ -516,15 +516,13 @@ def test_unknown_relation_is_rejected_rather_than_disclosed():
 
 
 def test_unknown_event_cannot_carry_hidden_text_or_subjects():
-    from qudgym.eye.contracts import Entity, Event
-    item = Entity(id='pack', kind='item')
+    from qudgym.eye.contracts import Event
     unknown = Evidence(status='unknown', channel='unknown', turn=0)
     with pytest.raises(ValidationError):
         Event(id='secret', kind='message', text='hidden target', evidence=unknown,
               subjects=('pack',))
     with pytest.raises(ValidationError):
         Event(id='secret', kind='message', text='', evidence=unknown)
-    assert item.id == 'pack'
 
 
 def test_agent_view_rejects_forged_memory_turn():
