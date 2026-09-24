@@ -1,7 +1,7 @@
 """Versioned wire types. Observations never contain oracle state or credentials."""
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 WIRE_VERSION = "0.1"
@@ -127,9 +127,14 @@ class Hello(Model):
     op: Literal["hello"] = "hello"
 
 
+class Released(Model):
+    released: Literal[True]
+
+
 class Reset(Model):
     op: Literal["reset"] = "reset"
     seed: int = Field(default=0, ge=0, le=2**32 - 1, strict=True)
+    result_model: ClassVar[type[Transition]] = Transition
 
 
 class Observe(Model):
@@ -140,20 +145,24 @@ class Step(Model):
     op: Literal["step"] = "step"
     decision_id: Identifier
     action_id: Identifier
+    result_model: ClassVar[type[Transition]] = Transition
 
 
 class Snapshot(Model):
     op: Literal["snapshot"] = "snapshot"
+    result_model: ClassVar[type[SnapshotHandle]] = SnapshotHandle
 
 
 class Restore(Model):
     op: Literal["restore"] = "restore"
     handle: Identifier
+    result_model: ClassVar[type[Transition]] = Transition
 
 
 class Release(Model):
     op: Literal["release"] = "release"
     handle: Identifier
+    result_model: ClassVar[type[Released]] = Released
 
 
 class HashState(Model):
