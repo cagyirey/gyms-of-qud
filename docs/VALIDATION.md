@@ -1,5 +1,13 @@
 # Validation record
 
+## Compatibility contract validation — 2026-09-24
+
+- Full Python suite: **144 passed** (139 inherited tests + 5 compatibility tests).
+- Typed install-manifest and diagnostic-report validation passed against synthetic fixtures.
+- `qudgym compat-validate` emitted summaries without echoing the source path or document body.
+- Compatibility schemas export through `qudgym schema`.
+- No game installation, diagnostic mod, live API, save mutation, or NeMo rollout was executed.
+
 ## Follow-up validation — 2026-09-24
 
 - `python -m pytest -q`: **64 passed** on the cleanup branch.
