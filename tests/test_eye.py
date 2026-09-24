@@ -399,6 +399,16 @@ def test_nemo_presenters_are_isolated_idempotent_and_default_unchanged():
     assert from_text(sa).current.decision_id == oa.decision_id
 
 
+def test_presenter_tracks_legacy_decision_lineage():
+    backend = MockBackend()
+    presenter = ObservationPresenter('agent-eye-v1')
+    first = from_text(presenter.render(backend.reset(seed=3).observation))
+    result = backend.step('wait', decision_id=first.current.decision_id)
+    second = from_text(presenter.render(result.observation))
+    assert first.current.parent_decision_id is None
+    assert second.current.parent_decision_id == first.current.decision_id
+
+
 def test_trace_roundtrip_no_overwrite_and_injection_safe(tmp_path):
     records = demo_records('bow')
     raw = records[0].model_dump(mode='json')
