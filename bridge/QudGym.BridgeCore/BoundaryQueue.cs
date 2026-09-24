@@ -76,6 +76,23 @@ namespace QudGym.BridgeCore
             }
         }
 
+        public void InitializeTurnThread()
+        {
+            lock (gate)
+            {
+                EnsureUsable();
+                int current = Thread.CurrentThread.ManagedThreadId;
+                if (turnThread == null)
+                {
+                    turnThread = current;
+                }
+                else if (turnThread != current)
+                {
+                    throw new InvalidOperationException("Wrong game-turn thread");
+                }
+            }
+        }
+
         public bool TryBeginOnTurnThread(string currentDecisionId, out PendingAction? pending)
         {
             lock (gate)
@@ -143,7 +160,8 @@ namespace QudGym.BridgeCore
         private void EnsureTurnThread()
         {
             int current = Thread.CurrentThread.ManagedThreadId;
-            if (turnThread == null) turnThread = current;
+            if (turnThread == null)
+                throw new InvalidOperationException("Turn thread is not initialized");
             if (turnThread != current) throw new InvalidOperationException("Wrong game-turn thread");
         }
         private void EnsureUsable()

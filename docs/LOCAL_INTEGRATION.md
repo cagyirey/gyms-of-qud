@@ -16,7 +16,7 @@ No DLL uploads or saves are necessary at this stage. For the next patch, a local
 
 ## What the C# scaffold does
 
-`bridge/QudGym.BridgeCore` is an engine-neutral queue and decision-boundary handoff. Network callers enqueue typed action selections. The owning game-turn thread begins them and completes a task with an immutable serialized observation at a resolved boundary. It checks thread ownership, stale cursors, pre-dispatch cancellation, queue capacity, and fault/reconciliation behavior. Post-dispatch cancellation does not pretend to undo an applied command.
+`bridge/QudGym.BridgeCore` is an engine-neutral queue and decision-boundary handoff. Network callers enqueue typed action selections. The owning game-turn thread explicitly initializes the queue, begins actions and completes a task with an immutable serialized observation at a resolved boundary. It checks thread ownership, stale cursors, pre-dispatch cancellation, queue capacity, and fault/reconciliation behavior. Post-dispatch cancellation does not pretend to undo an applied command.
 
 The `netstandard2.1` target is a provisional standalone library target, NOT a claim about the installed Qud compiler/runtime. Confirm the local mod target before choosing whether to compile this as a referenced assembly or adapt its source to the mod compiler.
 
