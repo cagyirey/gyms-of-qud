@@ -49,6 +49,8 @@ def test_null_is_unknown_not_zero():
         Fact(attribute='hp', value=0, evidence=e)
     with pytest.raises(ValidationError):
         Fact(attribute='hp', value=None, evidence=Evidence(channel='vision', turn=0))
+    with pytest.raises(ValidationError):
+        Fact(attribute='hp', value=0, evidence=Evidence(channel='unknown', turn=0))
     assert Fact(attribute='hp', value=0, evidence=Evidence(channel='self', turn=0)).value == 0
 
 
@@ -393,32 +395,44 @@ def _command_frame(*, episode, decision, turn, zone_id, width=1, height=1, cells
                  actions=(Action(id='wait', operation='wait', label='Wait', source='hero'),))
 
 
-def test_max_cell_subject_is_remembered_and_failure_does_not_leak():
-    from qudgym.eye.contracts import Cell, Entity, Evidence, Fact, Layer
+def test_max_cell_subject_is_remembered():
+    from qudgym.eye.contracts import Cell, Evidence, Fact, Layer
     zone = 'z' * 160
     ev = Evidence(channel='vision', turn=0)
     cell = Cell(x=1023, y=1023, layers=(Layer(id='ground', fact=Fact(
         attribute='glyph', value='.', evidence=ev)),))
-    secret = Entity(id='a', kind='item', facts=(Fact(attribute='name', value='SECRET', evidence=ev),))
-    frame = _command_frame(episode='ep1', decision='d1', turn=0, zone_id=zone, width=1024, height=1024,
-                           cells=(cell,), extra_entities=(secret,))
-    mem = EvidenceMemory()
-    try:
-        mem.update(frame)
-    except ValidationError:
-        leaked = True
-    else:
-        leaked = False
-    later = _command_frame(episode='ep2', decision='d2', turn=0, zone_id='short')
-    if leaked:
-        view = mem.update(later)
-        assert 'SECRET' not in view.model_dump_json()
-    else:
-        remembered = mem.update(_command_frame(
-            episode='ep1', decision='d2', turn=1, zone_id=zone, width=1024, height=1024))
-        assert any(r.subject == f'cell:{zone}:1023:1023' for r in remembered.remembered)
-        with pytest.raises(ValueError, match='explicitly'):
-            mem.update(later)
+    frame = _command_frame(episode='ep1', decision='d1', turn=0, zone_id=zone,
+                           width=1024, height=1024, cells=(cell,))
+    memory = EvidenceMemory()
+    view = memory.update(frame)
+    assert any(subject == f'cell:{zone}:1023:1023' for subject, _ in memory._records)
+    assert memory.update(frame) == view
+
+
+def test_memory_update_is_atomic_when_record_validation_fails(monkeypatch):
+    from qudgym.eye import memory as memory_module
+    from qudgym.eye.contracts import Entity, Evidence, Fact
+    ev = Evidence(channel='vision', turn=0)
+    first = Entity(id='a', kind='item', facts=(Fact(attribute='name', value='first', evidence=ev),))
+    second = Entity(id='b', kind='item', facts=(Fact(attribute='name', value='second', evidence=ev),))
+    frame = _command_frame(episode='ep', decision='d', turn=0, zone_id='z',
+                           extra_entities=(first, second))
+    original = memory_module.MemoryRecord
+    calls = []
+
+    def flaky_record(**kwargs):
+        calls.append(kwargs['subject'])
+        if len(calls) == 2:
+            raise ValueError('synthetic record failure')
+        return original(**kwargs)
+
+    monkeypatch.setattr(memory_module, 'MemoryRecord', flaky_record)
+    memory = EvidenceMemory()
+    with pytest.raises(ValueError, match='synthetic record failure'):
+        memory.update(frame)
+    assert memory._frame is None
+    assert not memory._records
+    assert not memory._decisions
 
 
 def test_unknown_relation_does_not_reject_the_frame():
@@ -454,6 +468,13 @@ def test_legacy_conversion_accepts_observations_outside_eye_limits():
     assert frame.events[0].text == 'm' * 8192
     assert frame.entities[0].location is None
     assert all(not entity.id.startswith('cell:') for entity in frame.entities)
+
+
+def test_legacy_conversion_does_not_invent_an_empty_zone():
+    obs = MockBackend().reset().observation
+    frame = from_observation(obs.model_copy(update={'tiles': ()}))
+    assert frame.zones == ()
+    assert frame.entities[0].location is None
 
 
 def test_scorer_ignores_unobserved_and_cross_zone_positions():
