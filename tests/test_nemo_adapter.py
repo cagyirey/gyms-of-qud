@@ -168,6 +168,69 @@ def test_same_step_id_with_a_different_action_is_rejected():
     asyncio.run(scenario())
 
 
+def test_invalid_step_reply_is_cached_before_a_retry():
+    async def scenario():
+        server = _server()
+        await server.reset(
+            {'seed': 7, 'max_decisions': 8, '_ng_task_index': 5, '_ng_rollout_index': 0}, 'cookie-1')
+        action = _Action('not-json')
+        metadata = {'_ng_step_request_id': 'invalid-1'}
+        first = await server.step(action, metadata, 'cookie-1')
+        second = await server.step(action, metadata, 'cookie-1')
+        assert second == first
+        assert second[4]['agent_attempts'] == 1
+
+    asyncio.run(scenario())
+
+
+def test_render_failure_faults_worker_instead_of_restepping(monkeypatch):
+    async def scenario():
+        server = _server()
+        observation, _info = await server.reset(
+            {'seed': 7, 'max_decisions': 8, '_ng_task_index': 6, '_ng_rollout_index': 0}, 'cookie-1')
+        decision_id = json.loads(observation)['decision_id']
+        state = server.session_state['cookie-1']
+        monkeypatch.setattr(state['presenter'], 'render', lambda _observation: (_ for _ in ()).throw(ValueError('render failed')))
+        metadata = {'_ng_step_request_id': 'render-failure'}
+        with pytest.raises(HTTPException) as first:
+            await server.step(_action('wait', decision_id), metadata, 'cookie-1')
+        assert first.value.status_code == 500
+        assert state['faulted'] is True
+        with pytest.raises(HTTPException) as retry:
+            await server.step(_action('wait', decision_id), metadata, 'cookie-1')
+        assert retry.value.status_code == 500
+        with pytest.raises(HTTPException) as fresh:
+            await server.step(_action('wait', decision_id), {'_ng_step_request_id': 'fresh'}, 'cookie-1')
+        assert fresh.value.status_code == 500
+
+    asyncio.run(scenario())
+
+
+def test_reset_rebind_rejects_an_active_target_cookie():
+    async def scenario():
+        server = _server()
+        meta = {'seed': 7, 'max_decisions': 8, '_ng_task_index': 7, '_ng_rollout_index': 0}
+        await server.reset(meta, 'cookie-source')
+        await server.reset({**meta, '_ng_rollout_index': 1}, 'cookie-target')
+        with pytest.raises(HTTPException) as conflict:
+            await server.reset(meta, 'cookie-target')
+        assert conflict.value.status_code == 409
+
+    asyncio.run(scenario())
+
+
+def test_reset_identity_separates_representations():
+    async def scenario():
+        server = _server()
+        metadata = {'seed': 7, 'max_decisions': 8, '_ng_task_index': 8, '_ng_rollout_index': 0}
+        native, _ = await server.reset(metadata, 'native-cookie')
+        rich, _ = await server.reset({**metadata, 'representation': 'agent-eye-v1'}, 'rich-cookie')
+        assert json.loads(native)['episode_id'] != json.loads(rich)['current']['episode_id']
+        assert len(server._sessions.active_keys()) == 2
+
+    asyncio.run(scenario())
+
+
 def test_expired_session_does_not_replay_a_cached_step(monkeypatch):
     clock = [1.0]
     monkeypatch.setattr('qudgym.sessions.time.monotonic', lambda: clock[0])
