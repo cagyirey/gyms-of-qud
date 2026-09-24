@@ -19,6 +19,7 @@ from nemo_gym.server_utils import SESSION_ID_KEY
 from resources_servers.gymnasium.base import GymnasiumServer, extract_text
 
 from qudgym.errors import QudGymError
+from qudgym.eye.presenter import ObservationPresenter, Representation
 from qudgym.models import Identifier, Model
 from qudgym.sessions import SessionManager
 
@@ -33,6 +34,7 @@ class ActionSelection(Model):
 
 
 class SeedSpec(Model):
+    representation: Representation = "native"
     seed: int = Field(default=0, ge=0, le=2**32-1, strict=True)
     max_decisions: int = Field(default=128, ge=1, le=10000, strict=True)
 
@@ -41,13 +43,15 @@ class Empty(Model):
     pass
 
 
-def _reset_identity(metadata: dict, *, seed: int, max_decisions: int) -> str | None:
+def _reset_identity(metadata: dict, *, seed: int, max_decisions: int,
+                    representation: str) -> str | None:
     names = ('_ng_reset_request_id', '_ng_task_index', '_ng_rollout_index', '_ng_attempt_index')
     identity = {name: metadata[name] for name in names if metadata.get(name) is not None}
     if not identity:
         return None
     identity['seed'] = seed
     identity['max_decisions'] = max_decisions
+    identity['representation'] = representation
     return json.dumps(identity, sort_keys=True, default=str)
 
 
@@ -80,12 +84,22 @@ class QudGymServer(GymnasiumServer):
         observation, reward, terminated, truncated, info = cached[2]
         return observation, reward, terminated, truncated, deepcopy(info)
 
+    @staticmethod
+    def _render(presenter: ObservationPresenter, observation):
+        try:
+            return presenter.render(observation)
+        except (ValidationError, ValueError) as exc:
+            # A failed presentation is an infrastructure failure, not a game loss.
+            raise HTTPException(500, 'observation representation failed') from exc
+
     async def reset(self, metadata: dict, session_id: str | None = None):
         if not session_id:
             raise HTTPException(400, 'NeMo session middleware did not provide a session ID')
         self._prune()
-        spec = SeedSpec(seed=metadata.get('seed', 0), max_decisions=metadata.get('max_decisions', 128))
-        key = _reset_identity(metadata, seed=spec.seed, max_decisions=spec.max_decisions)
+        spec = SeedSpec(seed=metadata.get('seed', 0), max_decisions=metadata.get('max_decisions', 128),
+                        representation=metadata.get('representation', 'native'))
+        key = _reset_identity(metadata, seed=spec.seed, max_decisions=spec.max_decisions,
+                              representation=spec.representation)
         if key is not None:
             cached = self._reset_cache.get(key)
             if cached is not None:
@@ -107,12 +121,15 @@ class QudGymServer(GymnasiumServer):
         internal = None
         try:
             internal, observation = self._sessions.seed(seed=spec.seed, max_decisions=spec.max_decisions)
+            presenter = ObservationPresenter(spec.representation)
+            rendered = self._render(presenter, observation)
             self.session_state[session_id] = {'internal': internal, 'attempts': 0,
-                                              'limit': spec.max_decisions}
+                                              'limit': spec.max_decisions,
+                                              'presenter': presenter}
             internal = None
-            payload = (observation.model_dump_json(), {
-                'is_mock': True, 'task_id': 'mock-reach-exit-v1',
-                'objective_version': 'sparse-v1',
+            payload = (rendered, {
+                'is_mock': True, 'representation': spec.representation,
+                'task_id': 'mock-reach-exit-v1', 'objective_version': 'sparse-v1',
                 'supports_explicit_close': True,
                 # gymnasium_agent sends _ng_step_request_id only when this is true.
                 'supports_step_idempotency': True,
@@ -164,11 +181,12 @@ class QudGymServer(GymnasiumServer):
                 return self._policy_error(state, exc.code)
             raise HTTPException(410 if exc.code == 'session_missing' else 500, exc.code) from exc
         capped = state['attempts'] >= state['limit'] and not result.terminated
-        info = {'is_mock': True, **result.metrics.model_dump(mode='json'),
-                'agent_attempts': state['attempts']}
+        info = {'is_mock': True, 'representation': state['presenter'].representation,
+                **result.metrics.model_dump(mode='json'), 'agent_attempts': state['attempts']}
         if capped and not result.truncated:
             info['outcome'] = 'agent_attempt_limit'
-        payload = (result.observation.model_dump_json(), result.reward, result.terminated,
+        rendered = self._render(state['presenter'], result.observation)
+        payload = (rendered, result.reward, result.terminated,
                    result.truncated or capped, info)
         if request_id is not None and fingerprint is not None:
             self._step_cache[session_id] = (request_id, fingerprint, deepcopy(payload))
@@ -180,8 +198,10 @@ class QudGymServer(GymnasiumServer):
         # Invalid model output consumes harness budget but does not advance game/RNG state.
         observation = self._sessions.observe(state['internal'])
         capped = state['attempts'] >= state['limit']
-        return (observation.model_dump_json(), 0.0, False, capped,
-                {'is_mock': True, 'policy_error': code, 'agent_attempts': state['attempts'],
+        rendered = self._render(state['presenter'], observation)
+        return (rendered, 0.0, False, capped,
+                {'is_mock': True, 'representation': state['presenter'].representation,
+                 'policy_error': code, 'agent_attempts': state['attempts'],
                  'outcome': 'agent_attempt_limit' if capped else 'ongoing'})
 
     async def close_session(self, session_id: str | None):

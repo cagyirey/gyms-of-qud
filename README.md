@@ -66,6 +66,27 @@ qudgym smoke --record runs/mock-seed7.jsonl
 
 Records retain candidate IDs, before/after observations, rewards, terminal causes, task/objective versions and control metadata. They are research trajectories, **not** on-policy training batches containing fabricated token IDs or log probabilities.
 
+## Agent-eye replay and representative builds
+
+The [agent-eye guide](docs/AGENT_EYE.md) describes the new versioned perception
+contract, evidence memory, grounded actions, and opt-in NeMo presenter. It is
+separate from controller RPC 0.1; no live Qud adapter or trained model is implied.
+
+```bash
+qudgym eye-demo --preset listener --output runs/listener.jsonl --html runs/listener.html
+qudgym eye-replay runs/listener.jsonl --output runs/listener-replay.html
+qudgym eye-builds builds/library.json
+```
+
+Open the HTML to inspect exactly the recorded policy view, with current perception,
+remembered evidence, and hypotheses displayed separately. The demo presets are
+synthetic fixtures, not official Qud builds. Add your own representative builds to
+`builds/library.json` using the format in the guide; it is intentionally empty until
+you supply them. Validation checks metadata, not character legality in the game.
+
+See [agent-eye validation](docs/AGENT_EYE_VALIDATION.md) for executed tests and
+remaining live-game/NeMo checks.
+
 ## NeMo first
 
 See [the NeMo integration guide](integrations/nemo_gym/README.md). It extends upstream `GymnasiumServer` and uses `gymnasium_agent`, leaving rollout/token accounting and training to NeMo. The generic finite-candidate scorer remains separate: a pointer-head decision model is not assumed to be supported by every NIM or generative RL recipe.
