@@ -175,6 +175,11 @@ class ArenaFixture:
         return self.observe()
 
 
+def _observed_in(entity, zone: str) -> bool:
+    loc = getattr(entity, "location", None)
+    return loc is not None and loc.evidence.status == "observed" and loc.zone == zone
+
+
 class CapabilityScorer:
     """Diagnostic rule baseline, NOT learned intelligence or Qud strategy.
 
@@ -190,16 +195,17 @@ opaque IDs. Object references bind actions to the same entity table as perceptio
             score = -10.0
             if a.operation == "wait":
                 score = 0.0
-            if a.operation in ("attack", "fire") and actor and actor.location:
+            zone = actor.location.zone if actor and actor.location and actor.location.evidence.status == "observed" else None
+            if a.operation in ("attack", "fire") and zone is not None:
                 source, target = entities.get(a.source), entities.get(a.target)
-                if source and target and target.location:
+                if source and _observed_in(target, zone):
                     values = {p.attribute: p.value for p in source.facts if p.evidence.status == "observed"}
                     distance = abs(actor.location.x-target.location.x) + abs(actor.location.y-target.location.y)
                     reach = values.get("range")
                     if values.get("ready") is True and type(reach) in (int, float) and distance <= reach:
                         score = 100.0
-            if a.operation == "move" and actor and actor.location and a.destination:
-                targets = [e for e in f.entities if e.kind == "contact" and e.location]
+            if a.operation == "move" and zone is not None and a.destination and a.destination.zone == zone:
+                targets = [e for e in f.entities if e.kind == "contact" and _observed_in(e, zone)]
                 if targets:
                     old = min(abs(e.location.x-actor.location.x)+abs(e.location.y-actor.location.y) for e in targets)
                     new = min(abs(e.location.x-a.destination.x)+abs(e.location.y-a.destination.y) for e in targets)
