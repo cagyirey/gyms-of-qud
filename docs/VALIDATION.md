@@ -1,5 +1,14 @@
 # Validation record
 
+## Follow-up validation — 2026-09-24
+
+- `python -m pytest -q`: **64 passed** on the cleanup branch.
+- `python -m compileall -q src scripts integrations`: passed.
+- `qudgym smoke`: passed (mock success, 4 turns / 5 decisions).
+- `python examples/branch_and_replay.py`: passed; identical mock state hash and fresh cursor.
+- .NET 10 `QudGym.BridgeCore` smoke test: passed.
+- No live Qud, F#/Suave transport, NeMo runtime, or model rollout was executed.
+
 ## Executed locally — 2026-09-23
 
 Runtime: Python 3.13.5. Direct library versions present: pydantic 2.13.4, pytest 9.0.2, FastAPI 0.128.2, httpx 0.28.1, uvicorn 0.48.0. This is an environment record, not a complete dependency lockfile.

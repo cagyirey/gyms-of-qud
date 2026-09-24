@@ -1,6 +1,12 @@
 # First live-install handoff
 
-A local Steam install of build 2.0.211.55 was used to load `mod/QudGym`. That mod only reports hook types and the thread it was called on. It does not observe, step, or reset a game. No full-state capture or turn throughput has been established.
+No live Qud integration is accepted in this repository yet. No live API compatibility, full-state capture or turn throughput has been established.
+
+## Why the previous transport is quarantined
+
+The former F#/Suave path was removed rather than treated as a working backend. It duplicated the controller protocol with a hand-written JSON parser, used an unbounded request cache, blocked the game turn thread on unbounded tasks, had no disconnect/cancellation path, and was not covered by the CI build. Those choices make a failed or disconnected client capable of wedging the game and make protocol behavior difficult to audit.
+
+A replacement must keep transport outside the game-turn state machine, use the versioned protocol models and bounded deduplication semantics, make cancellation/fault/reconciliation explicit, and pass tests against the exact installed game API before it is allowed to expose live capabilities. The engine-neutral `BoundaryQueue` remains the only handoff scaffold; it is not a socket server.
 
 ## Information to provide
 
@@ -14,7 +20,7 @@ No DLL uploads or saves are necessary at this stage. For the next patch, a local
 
 The `netstandard2.1` target is a provisional standalone library target, NOT a claim about the installed Qud compiler/runtime. Confirm the local mod target before choosing whether to compile this as a referenced assembly or adapt its source to the mod compiler.
 
-`mod/QudGym` is the loadable script mod: `manifest.json` plus `Diagnostic.cs`, which the game compiles. It has no player mutator attached, HTTP listener, input injection, visible-state extractor, or save adapter. The queue library is still not a mod. Its test project can be compiled independently with .NET 10 and requires no game DLLs:
+It is not yet a loadable Qud mod. It has no Qud manifest, player mutator attachment, HTTP listener, input injection, visible-state extractor or save adapter. No guessed Qud method names are embedded in executable code. The test project can be compiled independently with .NET 10 and requires no game DLLs:
 
 ```bash
 dotnet run --project bridge/QudGym.BridgeCore.SmokeTests -c Release
