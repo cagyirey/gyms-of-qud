@@ -18,7 +18,7 @@ ClaimKey = tuple[str, str, str, str]
 
 def disclosed_records(frame: Frame) -> list[tuple[str, str, Fact | Position]]:
     """Do not infer absence from an omitted entity, property, cell, or relation."""
-    records = []
+    records: list[tuple[str, str, Fact | Position]] = []
     for entity in frame.entities:
         if entity.location is not None:
             records.append((entity.id, "location", entity.location))
