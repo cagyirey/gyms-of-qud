@@ -1,1 +1,29 @@
-{"schema_version":"qud-build-library/1","presets":[]}
+{
+  "schema_version": "qud-build-library/2",
+  "presets": [
+    {
+      "schema_version": "qud-build/2",
+      "id": "artifex",
+      "revision": "1",
+      "game_build": "2.0.211.55",
+      "mods": null,
+      "native_export": {
+        "path": "loadouts/artifex.json",
+        "sha256": "11b8de9a2fd111bed23c61791b7b1636bddc9fa51d29e9b04f60a01dacf10128"
+      },
+      "notes": "Owner-supplied native export. Source-declared version is not verified runtime compatibility; enabled mods/load order are unconfirmed."
+    },
+    {
+      "schema_version": "qud-build/2",
+      "id": "marauder",
+      "revision": "1",
+      "game_build": "2.0.211.55",
+      "mods": null,
+      "native_export": {
+        "path": "loadouts/marauder.json",
+        "sha256": "215d8a210bba7a18c364a7e4ff1a0cfb2deda0520d643ecad216f0b7ed466977"
+      },
+      "notes": "Owner-supplied native export. Source-declared version is not verified runtime compatibility; enabled mods/load order are unconfirmed."
+    }
+  ]
+}

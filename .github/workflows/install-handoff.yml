@@ -1,0 +1,30 @@
+name: install-handoff
+on:
+  pull_request:
+    paths:
+      - 'tools/QudGym.ApiProbe*/**'
+      - 'scripts/inspect_qud_install.py'
+      - 'src/qudgym/native_exports.py'
+      - 'src/qudgym/eye/builds.py'
+      - 'builds/library.json'
+      - 'tests/test_api_probe.py'
+      - 'tests/test_native_exports.py'
+      - '.github/workflows/install-handoff.yml'
+permissions:
+  contents: read
+jobs:
+  metadata-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m pytest -q tests/test_native_exports.py tests/test_api_probe.py
+        env:
+          QUDGYM_RUN_DOTNET_PROBE_TESTS: '1'
