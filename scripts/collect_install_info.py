@@ -26,8 +26,15 @@ def collect(root: Path, *, game_version: str | None = None, mods_dir: Path | Non
     assemblies = []
     for name in ASSEMBLIES:
         path = managed / name
-        if not path.is_file() or path.is_symlink():
+        if not path.is_file():
             continue
+        # is_file() follows links, so discovery already treated this name as present.
+        # Skipping the symlink would publish a manifest that omits it.
+        if path.is_symlink():
+            resolved = path.resolve(strict=True)
+            if not resolved.is_relative_to(root):
+                raise ValueError(f'{name} is a symlink that resolves outside the selected install')
+            path = resolved
         hasher = hashlib.sha256()
         with path.open('rb') as file:
             for chunk in iter(lambda: file.read(1024 * 1024), b''):

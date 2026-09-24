@@ -14,7 +14,8 @@ Foundations for a **decision-boundary Caves of Qud environment**, for finite-can
 | Authenticated localhost RPC, request correlation, bounded deduplication, client | Implemented and locally tested, including real loopback HTTP |
 | Candidate-scoring interface and JSONL trajectories | Implemented and locally tested |
 | NeMo Gym native GymnasiumServer adapter and gymnasium_agent recipe | Source-reviewed scaffold; NeMo runtime smoke test outstanding |
-| C# game-thread handoff/decision-boundary queue | Source scaffold plus smoke tests and CI job; not compiled locally |
+| C# game-thread handoff/decision-boundary queue | Smoke-tested on .NET 10; not loaded by the game |
+| Qud script mod (`mod/QudGym`) | Loads in build 2.0.211.55, including headless; diagnostic only |
 | Installed-game manifest collector | Implemented and locally tested on synthetic files |
 | Live Qud reset/observe/step, action enumeration, save/restore | Not implemented |
 

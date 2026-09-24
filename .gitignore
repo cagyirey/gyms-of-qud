@@ -18,6 +18,7 @@ snapshots/
 *.dll
 *.exe
 *.pdb
+*.deps.json
 *.unity3d
 *.asset
 *.assets
