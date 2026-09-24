@@ -6,7 +6,7 @@ an API exists, or turn a report into a live capability.
 from __future__ import annotations
 
 import json
-from pathlib import PurePath
+from pathlib import PurePath, PureWindowsPath
 from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -23,7 +23,8 @@ def _safe_component(value: str) -> str:
 
 
 def _redacted_text(value: str) -> str:
-    if PurePath(value).is_absolute() or value.startswith(("~", "\\\\")):
+    if (PurePath(value).is_absolute() or PureWindowsPath(value).is_absolute()
+            or value.startswith(("~", "\\\\"))):
         raise ValueError("compatibility evidence must not contain absolute paths")
     if "/Users/" in value or "/home/" in value or "Application Support" in value:
         raise ValueError("compatibility evidence must not contain private paths")
@@ -135,6 +136,12 @@ class HookEvidence(CompatModel):
     @classmethod
     def safe_detail(cls, value: str) -> str:
         return _redacted_text(value)
+
+    @model_validator(mode="after")
+    def available_hook_has_thread(self) -> HookEvidence:
+        if self.available and self.thread_id is None:
+            raise ValueError("available hooks must include an observed thread ID")
+        return self
 
 
 class DiagnosticReport(CompatModel):

@@ -50,6 +50,11 @@ def test_compatibility_contract_rejects_unsafe_or_ambiguous_entries():
     with pytest.raises(ValidationError):
         DiagnosticReport.model_validate(payload)
 
+    payload = diagnostic_payload()
+    payload['hooks'][0]['thread_id'] = None
+    with pytest.raises(ValidationError):
+        DiagnosticReport.model_validate(payload)
+
     payload = manifest_payload()
     payload['assemblies'].append(payload['assemblies'][0].copy())
     with pytest.raises(ValidationError):
