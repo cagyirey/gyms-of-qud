@@ -26,3 +26,6 @@ snapshots/
 *.log
 **/bin/
 **/obj/
+
+# Agent-eye schemas are generated from the typed source contract.
+/schemas/eye/
