@@ -76,6 +76,8 @@ namespace QudGym.BridgeCore
             }
         }
 
+        /// <summary>Bind the queue to the verified game-turn thread.</summary>
+        /// <remarks>The game adapter must call this before any turn-thread operation.</remarks>
         public void InitializeTurnThread()
         {
             lock (gate)
