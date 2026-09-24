@@ -3,7 +3,7 @@
 ## Executed on the rebased branch
 
 - Python 3.13.5, Pydantic 2.13.4. Installed editable with local dependencies.
-- `python -m pytest -q`: **141 passed** (72 foundation + 69 agent-eye tests).
+- `python -m pytest -q`: **142 passed** (72 foundation + 70 agent-eye tests).
 - All three synthetic arena demos terminate after disabling the practice target.
 - `python -m compileall -q src scripts integrations`: passed.
 - `qudgym smoke`, `python examples/branch_and_replay.py`, and the .NET 10
