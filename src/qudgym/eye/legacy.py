@@ -1,13 +1,27 @@
-"""One-way adapter from foundation RPC observations, NOT from Qud internals.
+"""One-way adapter from the corridor mock's RPC observation, NOT from Qud internals.
 
 The legacy observation is too sparse to supply real anatomy, resources, sensory
-contacts or equipment. Missing information stays missing; do not synthesize it.
+contacts, zone identity, or viewport origin. Missing information stays missing;
+do not synthesize it. A live adapter must supply a separately verified projection
+with those fields rather than reusing this converter.
 """
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ..models import Observation
-from .contracts import Action, Cell, Destination, Entity, Event, Evidence, Fact, Frame, Layer, Position, Prompt, Zone
-
+from .contracts import (
+    Action,
+    Cell,
+    Destination,
+    Entity,
+    Event,
+    Evidence,
+    Fact,
+    Frame,
+    Layer,
+    Position,
+    Prompt,
+    Zone,
+)
 
 _TEXT = 8192
 _ZONE = 1024
@@ -27,7 +41,8 @@ def _inside(x: int, y: int, width: int, height: int) -> bool:
     return 0 <= x < width and 0 <= y < height
 
 
-def from_observation(observation: Observation) -> Frame:
+def from_observation(observation: Observation, *, branch_id: str | None = None,
+                     parent_decision_id: str | None = None) -> Frame:
     o = observation
     self_ev = Evidence(channel="self", turn=o.turn)
     vision = Evidence(channel="vision", turn=o.turn)
@@ -36,6 +51,7 @@ def from_observation(observation: Observation) -> Frame:
     # Cells past the agent-eye zone cap, and positions outside that rectangle,
     # are omitted rather than invented or rejected.
     zone_id = "legacy-mock-zone"
+    branch_id = branch_id or o.episode_id
     player_id = "legacy-player"
     rows = tuple(row[:_ZONE] for row in o.tiles[:_ZONE])
     width = min(_ZONE, max((len(row) for row in rows), default=0))
@@ -86,7 +102,8 @@ def from_observation(observation: Observation) -> Frame:
     events = tuple(Event(id=f"message:{i}", kind="message", text=_clip(m),
                          evidence=Evidence(channel="message", turn=o.turn))
                    for i, m in enumerate(o.messages))
-    return Frame(episode_id=o.episode_id, decision_id=o.decision_id, turn=o.turn,
+    return Frame(episode_id=o.episode_id, branch_id=branch_id, decision_id=o.decision_id,
+                 parent_decision_id=parent_decision_id, turn=o.turn,
                  phase=o.phase, controlled_actor=player_id, zones=zones, entities=tuple(entities),
                  events=events, actions=tuple(actions),
                  prompt=Prompt(kind=o.prompt.kind, text=_clip(o.prompt.text)) if o.prompt else None)

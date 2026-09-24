@@ -12,7 +12,7 @@ from qudgym.eye.builds import BuildLibrary, BuildPreset, load_library
 from qudgym.eye.cli import demo_records
 from qudgym.eye.contracts import AgentView, Evidence, Fact, Frame, Hypothesis
 from qudgym.eye.encoding import from_text, structured, text
-from qudgym.eye.fixtures import ArenaFixture, CapabilityScorer, PRESETS
+from qudgym.eye.fixtures import PRESETS, ArenaFixture, CapabilityScorer
 from qudgym.eye.legacy import from_observation
 from qudgym.eye.memory import EvidenceMemory
 from qudgym.eye.presenter import ObservationPresenter
@@ -65,7 +65,7 @@ def test_contract_rejects_raw_privileged_fields(field, value):
 
 @pytest.mark.parametrize('mutation', ['duplicate_entity', 'dangling_source', 'dangling_relation',
                                      'dangling_event', 'future_evidence', 'stale_observation',
-                                     'outside_cell', 'duplicate_layer', 'duplicate_action',
+                                     'outside_cell', 'duplicate_layer', 'duplicate_action', 'duplicate_relation',
                                      'missing_actor', 'terminal_actions', 'prompt_phase'])
 def test_schema_rejects_inconsistent_frames(mutation):
     game = ArenaFixture()
@@ -87,6 +87,8 @@ def test_schema_rejects_inconsistent_frames(mutation):
         d['zones'][0]['cells'][0]['layers'].append(d['zones'][0]['cells'][0]['layers'][0])
     elif mutation == 'duplicate_action':
         d['actions'].append(d['actions'][0])
+    elif mutation == 'duplicate_relation':
+        d['relations'].append(d['relations'][0])
     elif mutation == 'missing_actor':
         d['controlled_actor'] = None
     elif mutation == 'terminal_actions':
@@ -97,8 +99,18 @@ def test_schema_rejects_inconsistent_frames(mutation):
         Frame.model_validate(d)
 
 
+def test_frame_cardinality_budget_is_enforced():
+    from qudgym.eye.contracts import Action
+    base = ArenaFixture().observe()
+    data = base.model_dump(mode='json')
+    data['actions'] = [Action(id=f'a{i}', operation='wait', label='wait', source='p').model_dump(mode='json')
+                       for i in range(4097)]
+    with pytest.raises(ValidationError):
+        Frame.model_validate(data)
+
+
 def test_creation_does_not_require_a_world_position():
-    f = Frame(episode_id='e', decision_id='d', turn=0, phase='creation', controlled_actor=None,
+    f = Frame(episode_id='e', branch_id='b', decision_id='d', turn=0, phase='creation', controlled_actor=None,
               actions=({'id':'choose', 'operation':'progress', 'label':'Choose a supplied option'},))
     assert f.zones == () and f.controlled_actor is None
 
@@ -165,6 +177,24 @@ def test_unknown_now_preserves_past_evidence_in_separate_memory():
     assert old.last_turn < view.current.turn
 
 
+def test_reported_claim_does_not_overwrite_newer_observation():
+    from qudgym.eye.contracts import Entity, Fact
+    def frame(decision, turn, parent, value, evidence):
+        item = Entity(id='item', kind='item', facts=(Fact(
+            attribute='hp', value=value, evidence=evidence),))
+        return _command_frame(episode='ep', decision=decision, turn=turn, parent_decision_id=parent,
+                              zone_id='z', extra_entities=(item,))
+    memory = EvidenceMemory()
+    memory.update(frame('d0', 0, None, 6, Evidence(channel='self', turn=0)))
+    memory.update(frame('d1', 1, 'd0', 5, Evidence(channel='self', turn=1)))
+    view = memory.update(frame('d2', 2, 'd1', 6, Evidence(
+        status='reported', channel='journal', turn=0)))
+    assert next(f.value for e in view.current.entities if e.id == 'item'
+                for f in e.facts if f.attribute == 'hp') == 6
+    remembered = [r for r in view.remembered if r.subject == 'item' and r.attribute == 'hp']
+    assert [(r.fact.value, r.fact.evidence.status) for r in remembered] == [(5, 'observed')]
+
+
 def test_hypotheses_never_become_current_or_remembered_facts():
     g = ArenaFixture()
     m = EvidenceMemory()
@@ -206,6 +236,31 @@ def test_memory_repeat_reset_and_rewind():
     assert not m.update(root).remembered
 
 
+def test_same_turn_branches_require_explicit_lineage():
+    game = ArenaFixture()
+    memory = EvidenceMemory()
+    root = memory.update(game.observe())
+    prompt = step(game, 'look')
+    assert prompt.turn == root.current.turn
+    memory.update(prompt)
+    alternate = prompt.model_copy(update={'branch_id': 'alternate-branch'})
+    with pytest.raises(ValueError, match='branch'):
+        memory.update(alternate)
+    wrong_parent = prompt.model_copy(update={'decision_id': 'wrong-parent', 'parent_decision_id': None})
+    with pytest.raises(ValueError, match='parent'):
+        memory.update(wrong_parent)
+
+
+def test_evicted_decision_cannot_reenter_lineage():
+    game = ArenaFixture()
+    memory = EvidenceMemory(max_decisions=1)
+    root = game.observe()
+    memory.update(root)
+    memory.update(step(game, 'rest'))
+    with pytest.raises(ValueError, match='rewind|parent'):
+        memory.update(root)
+
+
 def test_changed_payload_on_same_cursor_is_rejected():
     g = ArenaFixture()
     m = EvidenceMemory()
@@ -222,10 +277,11 @@ def test_memory_limits_and_event_history():
     v = m.update(step(g, 'rest'))
     assert v.forgotten_records > 0 and len(v.remembered) <= 3
     assert v.forgotten_events == 1
+    g.reset()
     m = EvidenceMemory()
     m.update(g.observe())
     v = m.update(step(g, 'look'))
-    assert v.remembered_events and v.remembered_events[0].event.text == 'No new event.'
+    assert v.remembered_events and v.remembered_events[0].event.text == 'Synthetic arena: disable the practice target.'
 
 
 @pytest.mark.parametrize('limit', [0, -1, True, 1.5])
@@ -367,13 +423,15 @@ def test_trace_roundtrip_no_overwrite_and_injection_safe(tmp_path):
         render_html(records, html)
 
 
-@pytest.mark.parametrize('bad', ['duplicate_decision', 'mixed_episode', 'bad_action', 'unsupported_version'])
+@pytest.mark.parametrize('bad', ['duplicate_decision', 'mixed_episode', 'branch_fork', 'bad_action', 'unsupported_version'])
 def test_trace_rejects_bad_history_or_actions(tmp_path, bad):
     records = [r.model_dump(mode='json') for r in demo_records('bow')]
     if bad == 'duplicate_decision':
         records[1]['view']['current']['decision_id'] = records[0]['view']['current']['decision_id']
     elif bad == 'mixed_episode':
         records[1]['view']['current']['episode_id'] = 'another'
+    elif bad == 'branch_fork':
+        records[1]['view']['current']['branch_id'] = 'another-branch'
     elif bad == 'bad_action':
         records[0]['selected_action'] = 'unknown'
     else:
@@ -384,12 +442,14 @@ def test_trace_rejects_bad_history_or_actions(tmp_path, bad):
         read_trace(path)
 
 
-def _command_frame(*, episode, decision, turn, zone_id, width=1, height=1, cells=(), extra_entities=(), relations=()):
-    from qudgym.eye.contracts import Action, Cell, Entity, Evidence, Position, Zone
+def _command_frame(*, episode, decision, turn, zone_id, width=1, height=1, cells=(), extra_entities=(),
+                   relations=(), branch_id=None, parent_decision_id=None):
+    from qudgym.eye.contracts import Action, Entity, Evidence, Position, Zone
     evidence = Evidence(channel='self', turn=turn)
     actor = Entity(id='hero', kind='actor', location=Position(
         zone=zone_id, x=0, y=0, evidence=evidence))
-    return Frame(episode_id=episode, decision_id=decision, turn=turn, phase='command',
+    return Frame(episode_id=episode, branch_id=branch_id or episode, decision_id=decision,
+                 parent_decision_id=parent_decision_id, turn=turn, phase='command',
                  controlled_actor='hero', zones=(Zone(id=zone_id, width=width, height=height, cells=cells),),
                  entities=(actor, *extra_entities), relations=relations,
                  actions=(Action(id='wait', operation='wait', label='Wait', source='hero'),))
@@ -405,7 +465,7 @@ def test_max_cell_subject_is_remembered():
                            width=1024, height=1024, cells=(cell,))
     memory = EvidenceMemory()
     view = memory.update(frame)
-    assert any(subject == f'cell:{zone}:1023:1023' for subject, _ in memory._records)
+    assert any(subject == f'cell:{zone}:1023:1023' for subject, _, _, _ in memory._records)
     assert memory.update(frame) == view
 
 
@@ -435,15 +495,34 @@ def test_memory_update_is_atomic_when_record_validation_fails(monkeypatch):
     assert not memory._decisions
 
 
-def test_unknown_relation_does_not_reject_the_frame():
-    from qudgym.eye.contracts import Entity, Evidence, Relation
+def test_unknown_relation_is_rejected_rather_than_disclosed():
+    from qudgym.eye.contracts import Entity, Relation
     item = Entity(id='pack', kind='item')
-    relation = Relation(subject='hero', predicate='carries', object='pack',
-                        evidence=Evidence(status='unknown', channel='unknown', turn=0))
-    frame = _command_frame(episode='ep', decision='d', turn=0, zone_id='z', extra_entities=(item,),
-                           relations=(relation,))
-    view = EvidenceMemory().update(frame)
-    assert not any(r.attribute.startswith('relation:') for r in view.remembered)
+    with pytest.raises(ValidationError):
+        relation = Relation(subject='hero', predicate='carries', object='pack',
+                            evidence=Evidence(status='unknown', channel='unknown', turn=0))
+        _command_frame(episode='ep', decision='d', turn=0, zone_id='z',
+                       extra_entities=(item,), relations=(relation,))
+
+
+def test_unknown_event_cannot_carry_hidden_text_or_subjects():
+    from qudgym.eye.contracts import Entity, Event
+    item = Entity(id='pack', kind='item')
+    unknown = Evidence(status='unknown', channel='unknown', turn=0)
+    with pytest.raises(ValidationError):
+        Event(id='secret', kind='message', text='hidden target', evidence=unknown,
+              subjects=('pack',))
+    with pytest.raises(ValidationError):
+        Event(id='secret', kind='message', text='', evidence=unknown)
+    assert item.id == 'pack'
+
+
+def test_agent_view_rejects_forged_memory_turn():
+    record = next(record for record in demo_records('bow') if record.view.remembered)
+    raw = record.view.model_dump(mode='json')
+    raw['remembered'][0]['last_turn'] += 1
+    with pytest.raises(ValidationError):
+        AgentView.model_validate(raw)
 
 
 def test_trace_roundtrip_preserves_unicode_line_separators(tmp_path):
@@ -500,8 +579,9 @@ def test_scorer_ignores_unobserved_and_cross_zone_positions():
 
 def test_replay_map_uses_terrain_layers_not_the_first_or_latest_fact():
     html_src = Path(__file__).resolve().parents[1].joinpath('src/qudgym/eye/replay.py').read_text()
-    assert 'layers[0]' not in html_src
-    assert 'layer:ground' in html_src or "id==='ground'" in html_src or 'ground' in html_src
+    assert 'layers.find' not in html_src
+    assert 'function layerRank' in html_src
+    assert 'if(n>rank)' in html_src
 
 
 def test_presets_are_user_authored_metadata_not_automatic_character_creation(tmp_path):

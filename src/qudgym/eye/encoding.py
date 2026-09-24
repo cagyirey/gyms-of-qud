@@ -5,10 +5,13 @@ transposition key. No seed, true identity, rollout reward or oracle handle enter
 these encoders. Callers must not pass a raw trajectory envelope.
 """
 import json
+
 from .contracts import AgentView
 
+MAX_VIEW_BYTES = 8 * 1024 * 1024
 
-def structured(view: AgentView) -> dict:
+
+def structured(view: AgentView) -> dict[str, object]:
     # Sorting set-like fields removes order accidents, but handles remain references.
     data = view.model_dump(mode="json")
     f = data["current"]
@@ -23,14 +26,21 @@ def structured(view: AgentView) -> dict:
     f["relations"].sort(key=lambda r: (r["subject"], r["predicate"], r["object"]))
     f["actions"].sort(key=lambda a: a["id"])
     # Events remain chronological. Sorting event IDs could invert narrative order.
-    data["remembered"].sort(key=lambda r: (r["subject"], r["attribute"]))
+    data["remembered"].sort(key=lambda r: (
+        r["subject"], r["attribute"],
+        r["fact"].get("evidence", {}).get("status", ""),
+        r["fact"].get("evidence", {}).get("channel", ""),
+    ))
     return data
 
 
 def text(view: AgentView) -> str:
     """JSON baseline, not a lossy model-generated summary of the structured view."""
-    return json.dumps(structured(view), sort_keys=True, ensure_ascii=False,
-                      separators=(",", ":"), allow_nan=False)
+    payload = json.dumps(structured(view), sort_keys=True, ensure_ascii=False,
+                         separators=(",", ":"), allow_nan=False)
+    if len(payload.encode("utf-8")) > MAX_VIEW_BYTES:
+        raise ValueError("agent view exceeds the aggregate byte budget")
+    return payload
 
 
 def from_text(value: str) -> AgentView:
