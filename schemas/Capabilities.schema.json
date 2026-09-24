@@ -1,0 +1,45 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {
+      "const": "0.1",
+      "default": "0.1",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "backend": {
+      "title": "Backend",
+      "type": "string"
+    },
+    "game_build": {
+      "title": "Game Build",
+      "type": "string"
+    },
+    "is_mock": {
+      "title": "Is Mock",
+      "type": "boolean"
+    },
+    "snapshot": {
+      "default": false,
+      "title": "Snapshot",
+      "type": "boolean"
+    },
+    "deterministic_restore": {
+      "default": false,
+      "title": "Deterministic Restore",
+      "type": "boolean"
+    },
+    "full_state_hash": {
+      "default": false,
+      "title": "Full State Hash",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "backend",
+    "game_build",
+    "is_mock"
+  ],
+  "title": "Capabilities",
+  "type": "object"
+}
