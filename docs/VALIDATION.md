@@ -1,5 +1,22 @@
 # Validation record
 
+## Native NeMo Gym contract smoke — 2026-09-24–25
+
+- Installed and ran `NVIDIA-NeMo/Gym@1c8261080bdc881b3e9b7f870e6418f160516991` (`0.7.0rc0`, Python 3.13.14) from a clean temporary checkout.
+- Core Python suite: **165 passed, 1 skipped**; the skip is the separately installed NeMo contract test. In the pinned NeMo environment, `tests/test_nemo_actual.py` passed **2/2** against the real imported Gym classes. The native CI job additionally stages the adapter and runs the full documented lifecycle against a test-only model fixture.
+- The first startup exposed a real staging defect: the generated resource-server requirements installed QudGym but omitted the local editable NeMo Gym package, so the server venv failed on `ModuleNotFoundError: fastapi`. The staging helper now installs both local projects; this was not hidden or reclassified as a policy failure.
+- After that correction, NeMo Gym's actual resource server, upstream `gymnasium_agent`, and model server all started and passed the shipped readiness check.
+- Two rollouts were collected through `gym eval run --no-serve` using a deterministic test-only model. The native `openai_model` path and the intended external-server `vllm_model` Responses-to-Chat-Completions path each completed the same two repeats. Both returned reward `+1`, `outcome=success`, `is_mock=true`, four game turns, and five decisions.
+- NeMo Gym produced native `rollouts.jsonl`, materialized inputs, aggregate metrics, model-call capture, `ng_trajectory` attachments, and a complete reward-profile join for both repeats. The committed lifecycle wrapper completed the same two-repeat flow, explicitly set `upload_rollouts=false`, and wrote its compact summary.
+- Native NeMo Gym/Lens OpenTelemetry was not enabled in this smoke; the existing standalone GenAI OTel projection tests remain the only executed OTel path. No OTLP network export was attempted.
+- The closed-session replay cache is now globally bounded (256 sessions / 300 seconds by default), with unit coverage for eviction and expiry; terminal replay still succeeds inside that bound.
+- The wrapper uses a dedicated process group for Gym cleanup and passes `upload_rollouts=false` to both Gym commands, preventing ambient exporter configuration from silently uploading mock content.
+- Staging and execution enforce the pinned NeMo Gym commit and reject tracked local NeMo modifications unless the explicit drift override is set.
+- Native rollout health reported both rows as `unobserved`, not healthy, because `gymnasium_agent` does not provide the producer turn/tool evidence required by several checks. This limitation remains explicit.
+- `gym eval export` rejected both rows because the current `gymnasium_agent` native trajectory contains coverage gaps. This confirms the documented strict boundary; no ATIF was fabricated and export remains non-gating.
+- This was a protocol/rollout contract smoke, not model-quality evidence. No small quantized model, Caves of Qud process, NeMo Platform mutation, Studio upload, live Qud API, save operation, or training job was executed.
+- NeMo Platform preflight found a listener on the canonical `:8080` with a non-200 readiness response, while a separate NeMo process was healthy on `:8090` and local configuration still pointed at `:8080`. No second platform was started, no configuration was rewritten, and no Studio/Intake mutation was attempted.
+
 ## Diagnostic and recording validation — 2026-09-24
 
 - Full Python suite: **154 passed** (144 inherited tests + 10 recording/diagnostic tests).
@@ -8,7 +25,7 @@
 - GenAI OTel projection passed with a temporary OpenTelemetry API/SDK in-memory provider; one mock action produced root agent, workflow, and tool spans.
 - The startup-only diagnostic C# project compiled against the installed `Managed` candidate whose `Assembly-CSharp.dll` SHA-256 matched the collected manifest and whose XRL marker was present. The local compiler emitted two known assembly-version conflict warnings; no build output or game assembly is tracked.
 - `python examples/branch_and_replay.py`, the real loopback `examples/http_client.py` smoke, `qudgym smoke`, compileall, and the .NET 10 `BridgeCore` smoke test passed.
-- No game process, diagnostic log run, live API, save mutation, native NeMo rollout, or model inference was executed. The local compile is not evidence that Qud loaded the mod.
+- At the time of this diagnostic/recording checkpoint, no game process, diagnostic log run, live API, save mutation, native NeMo rollout, or model inference was executed. The later native NeMo contract smoke is recorded above; the local C# compile still is not evidence that Qud loaded the mod.
 
 ## Compatibility contract validation — 2026-09-24
 
@@ -25,7 +42,7 @@
 - `qudgym smoke`: passed (mock success, 4 turns / 5 decisions).
 - `python examples/branch_and_replay.py`: passed; identical mock state hash and fresh cursor.
 - .NET 10 `QudGym.BridgeCore` smoke test: passed.
-- No live Qud, F#/Suave transport, NeMo runtime, or model rollout was executed.
+- No live Qud or F#/Suave transport was executed. The native NeMo runtime result was added later and is recorded above; no real model rollout was executed at this checkpoint.
 
 ## Executed locally — 2026-09-23
 
@@ -51,7 +68,7 @@ Runtime: Python 3.13.5. Direct library versions present: pydantic 2.13.4, pytest
 
 - GitHub publication was not part of the original archive validation. The earlier claim that connected actions were read-only was incorrect; publication is being performed through the GitHub write connector into the owner-created `cagyirey/gyms-of-qud`. No authenticated CLI is present locally.
 - No live Caves of Qud installation or game process. Game hooks, action completeness, scenario reset, save semantics and performance remain unvalidated.
-- No NeMo package/runtime available. Native adapter imports/configuration/actual model-driven rollouts and failure masking require validation in the pinned checkout.
+- The earlier checkpoint had no NeMo package/runtime available. The adapter has since passed a deterministic native Gym contract smoke, but actual small-model behavior, model-driven failure cases, and Platform integration remain unvalidated.
 - No .NET SDK/compiler available. C# library and smoke tests are source scaffolds; the CI job is configured but has not run here.
 - Python 3.11/3.12 CI matrix entries have not run locally; only 3.13.5 was tested.
 - No NIM inference endpoint, pointer-head serving integration, GPU training, NeMo RL job or trained decision model.

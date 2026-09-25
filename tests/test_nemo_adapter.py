@@ -102,9 +102,9 @@ class _Action:
         self.output = [_Message(text)]
 
 
-def _server():
+def _server(**config):
     app = _load_app()
-    return app.QudGymServer(config=app.QudGymConfig())
+    return app.QudGymServer(config=app.QudGymConfig(**config))
 
 
 def _action(action_id, decision_id):
@@ -146,6 +146,33 @@ def test_terminal_step_replay_survives_session_close():
         replay = await server.step(action, metadata, 'cookie-1')
         assert replay[1:] == first[1:]
         assert json.loads(replay[0])['turn'] == 1
+
+    asyncio.run(scenario())
+
+
+def test_closed_step_cache_is_globally_bounded_and_expires(monkeypatch):
+    async def scenario():
+        app = _load_app()
+        clock = [1.0]
+        monkeypatch.setattr(app.time, 'monotonic', lambda: clock[0])
+        server = _server(closed_step_cache_max_sessions=2, closed_step_cache_ttl_seconds=5)
+        for index in range(4):
+            session_id = f'cookie-{index}'
+            metadata = {'seed': 7, 'max_decisions': 1, '_ng_task_index': index}
+            observation, _info = await server.reset(metadata, session_id)
+            decision_id = json.loads(observation)['decision_id']
+            await server.step(
+                _action('wait', decision_id),
+                {'_ng_step_request_id': f'step-{index}'},
+                session_id,
+            )
+            await server.close_session(session_id)
+        assert len(server._step_cache) == 2
+        assert len(server._closed_step_cache) == 2
+        clock[0] = 10.0
+        server._prune_closed_step_caches()
+        assert not server._step_cache
+        assert not server._closed_step_cache
 
     asyncio.run(scenario())
 
@@ -262,5 +289,46 @@ def test_lost_reset_rebinds_one_session_to_the_retried_cookie():
         other, _info = await server.reset({**meta, '_ng_rollout_index': 9}, 'cookie-other')
         assert json.loads(other)['episode_id'] != json.loads(first)['episode_id']
         assert len(server._sessions.active_keys()) == 2
+
+    asyncio.run(scenario())
+
+
+def test_invalid_task_fields_are_rejected_before_session_creation():
+    async def scenario():
+        server = _server()
+        with pytest.raises(HTTPException) as exc:
+            await server.reset({'seed': -1, 'max_decisions': 8}, 'cookie-invalid')
+        assert exc.value.status_code == 422
+        assert len(server._sessions.active_keys()) == 0
+
+    asyncio.run(scenario())
+
+
+def test_scripted_native_actions_reach_mock_success():
+    async def scenario():
+        server = _server()
+        observation, info = await server.reset(
+            {'seed': 7, 'max_decisions': 16, '_ng_task_index': 0, '_ng_rollout_index': 0},
+            'cookie-success',
+        )
+        assert info['is_mock'] is True
+        result = None
+        for index, action in enumerate(('move:E', 'move:E', 'answer:open', 'move:E', 'move:E'), 1):
+            decision_id = json.loads(observation)['decision_id']
+            result = await server.step(
+                _action(action, decision_id),
+                {'_ng_step_request_id': f'success-{index}'},
+                'cookie-success',
+            )
+            observation, reward, terminated, truncated, step_info = result
+            if terminated or truncated:
+                break
+        assert reward == 1.0
+        assert terminated is True
+        assert truncated is False
+        assert step_info['outcome'] == 'success'
+        assert step_info['turns_elapsed'] == 4
+        assert step_info['decisions_elapsed'] == 5
+        assert step_info['is_mock'] is True
 
     asyncio.run(scenario())

@@ -12,6 +12,7 @@ htmlcov/
 !.env.example
 local/
 runs/
+outputs/
 snapshots/
 *.sav
 *.sav.*

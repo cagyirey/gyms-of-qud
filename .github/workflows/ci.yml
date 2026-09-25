@@ -2,7 +2,7 @@ name: foundation
 on:
   pull_request:
   push:
-    branches: [main, feat/qudgym-foundation]
+    branches: [main, feat/qudgym-foundation, feat/native-nemo-gym-rollout]
 permissions:
   contents: read
 jobs:
@@ -27,6 +27,74 @@ jobs:
       - run: qudgym eye-demo --preset listener --output /tmp/eye-demo.jsonl --html /tmp/eye-demo.html
       - run: qudgym eye-schema --output /tmp/eye-schemas
       - run: qudgym eye-builds builds/library.json
+  nemo-gym-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: NVIDIA-NeMo/Gym
+          ref: 1c8261080bdc881b3e9b7f870e6418f160516991
+          path: nemo-gym
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.14'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.11'
+      - name: Install pinned NeMo Gym
+        working-directory: nemo-gym
+        run: uv sync --extra dev
+      - name: Install QudGym into the NeMo Gym environment
+        run: uv pip install --python nemo-gym/.venv/bin/python -e .
+      - name: Stage and validate the native environment
+        run: |
+          python scripts/stage_nemo_adapter.py "$GITHUB_WORKSPACE/nemo-gym"
+          nemo-gym/.venv/bin/gym env validate \
+            --resources-server qudgym \
+            --model-type vllm_model \
+            --model contract-smoke \
+            --model-url http://127.0.0.1:65535/v1 \
+            --model-api-key dummy
+      - name: Exercise the installed NeMo Gym contracts
+        env:
+          PYTHONPATH: ${{ github.workspace }}/nemo-gym
+        run: nemo-gym/.venv/bin/python -m pytest -q tests/test_nemo_actual.py
+      - name: Run the native lifecycle contract smoke
+        run: |
+          set -euo pipefail
+          MODEL_PID=""
+          cleanup() {
+            if [[ -n "$MODEL_PID" ]] && kill -0 "$MODEL_PID" 2>/dev/null; then
+              kill -TERM "$MODEL_PID" 2>/dev/null || true
+              wait "$MODEL_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+          nemo-gym/.venv/bin/uvicorn \
+            --app-dir "$GITHUB_WORKSPACE" \
+            tests.fixtures.nemo_gym_scripted_model:app \
+            --host 127.0.0.1 --port 18081 >"$RUNNER_TEMP/qudgym-model.log" 2>&1 &
+          MODEL_PID=$!
+          for _ in $(seq 1 50); do
+            if curl -sf http://127.0.0.1:18081/health >/dev/null; then break; fi
+            sleep 0.2
+          done
+          curl -sf http://127.0.0.1:18081/health >/dev/null
+          rm -rf "$RUNNER_TEMP/qudgym-native-contract"
+          NEMO_GYM_ROOT="$GITHUB_WORKSPACE/nemo-gym" \
+          NEMO_GYM_MODEL=qudgym-scripted-smoke \
+          NEMO_GYM_MODEL_URL=http://127.0.0.1:18081/v1 \
+          NEMO_GYM_MODEL_API_KEY=dummy \
+          NEMO_GYM_MODEL_TYPE=openai_model \
+          NEMO_GYM_REPEATS=2 \
+          NEMO_GYM_CONCURRENCY=1 \
+          NEMO_GYM_HEAD_PORT=18080 \
+          scripts/run_nemo_gym_mock.sh "$RUNNER_TEMP/qudgym-native-contract"
+          test -f "$RUNNER_TEMP/qudgym-native-contract/summary.json"
+      - name: Check the native lifecycle wrapper
+        run: bash -n scripts/run_nemo_gym_mock.sh
+
   bridge-core:
     runs-on: ubuntu-latest
     steps:

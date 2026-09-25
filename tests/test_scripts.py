@@ -56,14 +56,28 @@ def test_manifest_rejects_assembly_symlink_that_leaves_the_install(tmp_path):
 
 
 def test_nemo_staging_does_not_overwrite(tmp_path):
+    (tmp_path / 'pyproject.toml').touch()
     (tmp_path / 'nemo_gym').mkdir()
     (tmp_path / 'nemo_gym/base_resources_server.py').touch()
     (tmp_path / 'resources_servers/gymnasium').mkdir(parents=True)
     (tmp_path / 'resources_servers/gymnasium/base.py').touch()
-    dest = STAGE(tmp_path, ROOT)
-    assert 'qudgym @ file:' in (dest / 'requirements.txt').read_text()
+    dest = STAGE(tmp_path, ROOT, allow_commit_drift=True)
+    requirements = (dest / 'requirements.txt').read_text()
+    assert 'nemo-gym[dev] @ file:' in requirements
+    assert 'qudgym @ file:' in requirements
     assert (dest / 'app.py').is_file()
+    assert (dest / 'task_data.py').is_file()
     with pytest.raises(FileExistsError):
+        STAGE(tmp_path, ROOT, allow_commit_drift=True)
+
+
+def test_nemo_staging_rejects_unpinned_checkouts_by_default(tmp_path):
+    (tmp_path / 'pyproject.toml').touch()
+    (tmp_path / 'nemo_gym').mkdir()
+    (tmp_path / 'nemo_gym/base_resources_server.py').touch()
+    (tmp_path / 'resources_servers/gymnasium').mkdir(parents=True)
+    (tmp_path / 'resources_servers/gymnasium/base.py').touch()
+    with pytest.raises(ValueError, match='git NeMo Gym checkout'):
         STAGE(tmp_path, ROOT)
 
 
