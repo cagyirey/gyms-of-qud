@@ -109,15 +109,18 @@ class ModReference(CompatModel):
     mod_id: Identifier
     load_order: Annotated[int, Field(ge=0, strict=True)]
     version: str | None = Field(default=None, max_length=128)
+    active: bool | None = None
+    enabled: bool | None = None
+    state: str | None = Field(default=None, max_length=64)
 
     @field_validator("mod_id")
     @classmethod
     def safe_mod_id(cls, value: str) -> str:
         return _safe_component(value)
 
-    @field_validator("version")
+    @field_validator("version", "state")
     @classmethod
-    def safe_version(cls, value: str | None) -> str | None:
+    def safe_text(cls, value: str | None) -> str | None:
         return None if value is None else _redacted_text(value)
 
 
@@ -125,7 +128,7 @@ class HookEvidence(CompatModel):
     name: Identifier
     available: bool
     thread_id: Annotated[int | None, Field(default=None, ge=0, strict=True)]
-    detail: ShortText = ""
+    detail: str = Field(default="", max_length=512)
 
     @field_validator("name")
     @classmethod
@@ -141,6 +144,39 @@ class HookEvidence(CompatModel):
     def available_hook_has_thread(self) -> HookEvidence:
         if self.available and self.thread_id is None:
             raise ValueError("available hooks must include an observed thread ID")
+        return self
+
+
+class DiagnosticEvent(CompatModel):
+    schema_version: Literal["qudgym-compat/1"]
+    event: Literal["cache-reset", "after-game-loaded"]
+    game_build: Annotated[str, Field(min_length=1, max_length=128)]
+    marketing_version: str | None = Field(default=None, max_length=128)
+    core_version: str | None = Field(default=None, max_length=128)
+    mod_initialized: bool | None = None
+    thread_id: Annotated[int, Field(ge=0, strict=True)]
+    core_thread_id: int | None = Field(default=None, ge=0, strict=True)
+    is_core_thread: bool | None = None
+    active_mods: Annotated[tuple[ModReference, ...], Field(max_length=256)] = ()
+    diagnostic_mod: ModReference | None = None
+    hooks: Annotated[tuple[HookEvidence, ...], Field(max_length=128)] = ()
+
+    @field_validator("game_build", "marketing_version", "core_version")
+    @classmethod
+    def safe_build(cls, value: str | None) -> str | None:
+        return None if value is None else _redacted_text(value)
+
+    @model_validator(mode="after")
+    def unique_evidence(self) -> DiagnosticEvent:
+        mod_ids = [entry.mod_id for entry in self.active_mods]
+        load_orders = [entry.load_order for entry in self.active_mods]
+        hook_names = [entry.name for entry in self.hooks]
+        if len(set(mod_ids)) != len(mod_ids):
+            raise ValueError("active mod IDs must be unique")
+        if len(set(load_orders)) != len(load_orders):
+            raise ValueError("active mod load orders must be unique")
+        if len(set(hook_names)) != len(hook_names):
+            raise ValueError("hook evidence names must be unique")
         return self
 
 
@@ -173,10 +209,14 @@ class DiagnosticReport(CompatModel):
         return self
 
 
-CompatibilityDocument: TypeAlias = InstallManifest | DiagnosticReport
+CompatibilityDocument: TypeAlias = InstallManifest | DiagnosticEvent | DiagnosticReport
 
 
-def parse_document(raw: bytes, *, kind: Literal["auto", "manifest", "diagnostic"] = "auto") -> CompatibilityDocument:
+def parse_document(
+    raw: bytes,
+    *,
+    kind: Literal["auto", "manifest", "event", "diagnostic"] = "auto",
+) -> CompatibilityDocument:
     if len(raw) > 1_048_576:
         raise ValueError("compatibility document exceeds 1 MiB")
     try:
@@ -185,10 +225,14 @@ def parse_document(raw: bytes, *, kind: Literal["auto", "manifest", "diagnostic"
         raise ValueError("compatibility document must be UTF-8 JSON") from exc
     if kind == "manifest":
         return InstallManifest.model_validate(value)
+    if kind == "event":
+        return DiagnosticEvent.model_validate(value)
     if kind == "diagnostic":
         return DiagnosticReport.model_validate(value)
     if isinstance(value, dict) and value.get("manifest_version") == "0.1":
         return InstallManifest.model_validate(value)
+    if isinstance(value, dict) and value.get("event") in {"cache-reset", "after-game-loaded"}:
+        return DiagnosticEvent.model_validate(value)
     return DiagnosticReport.model_validate(value)
 
 
@@ -200,6 +244,16 @@ def document_summary(document: CompatibilityDocument) -> dict[str, object]:
             "game_version": document.game_version,
             "assembly_count": len(document.assemblies),
             "mod_count": len(document.mods),
+        }
+    if isinstance(document, DiagnosticEvent):
+        return {
+            "kind": "diagnostic-event",
+            "schema_version": document.schema_version,
+            "event": document.event,
+            "game_build": document.game_build,
+            "thread_id": document.thread_id,
+            "hook_count": len(document.hooks),
+            "active_mod_count": len(document.active_mods),
         }
     return {
         "kind": "diagnostic-report",

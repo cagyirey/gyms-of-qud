@@ -20,7 +20,7 @@ No DLL uploads or saves are necessary at this stage. For the next patch, a local
 
 The `netstandard2.1` target is a provisional standalone library target, NOT a claim about the installed Qud compiler/runtime. Confirm the local mod target before choosing whether to compile this as a referenced assembly or adapt its source to the mod compiler.
 
-It is not yet a loadable Qud mod. It has no Qud manifest, player mutator attachment, HTTP listener, input injection, visible-state extractor or save adapter. No guessed Qud method names are embedded in executable code. The test project can be compiled independently with .NET 10 and requires no game DLLs:
+`bridge/QudGym.BridgeCore` is not a loadable Qud mod and has no Qud manifest, player mutator attachment, HTTP listener, input injection, visible-state extractor or save adapter. No guessed Qud method names are embedded in that library. The separate [`mod/QudGymCompat`](../mod/QudGymCompat/) directory is a startup-only, read-only diagnostic mod; it uses only verified lifecycle/type-resolution APIs and does not provide control or transport. The test project can be compiled independently with .NET 10 and requires no game DLLs:
 
 ```bash
 dotnet run --project bridge/QudGym.BridgeCore.SmokeTests -c Release
@@ -28,7 +28,7 @@ dotnet run --project bridge/QudGym.BridgeCore.SmokeTests -c Release
 
 ## Integration order
 
-First add a read-only diagnostic mod, checked against the exact local build. Record event thread IDs and availability of turn/input hooks without changing game state. Inspect APIs locally for observation, current prompts, pending commands and save lifecycle.
+First run the startup-only `mod/QudGymCompat` diagnostic against the exact local build and review its redacted game-log line. Type resolution is not runtime hook evidence. Then, only if that report is accepted, add a separately reviewed passive callback phase that records actual event thread IDs and availability without changing game state. Inspect APIs locally for observation, current prompts, pending commands and save lifecycle.
 
 Next implement a visible-state projection and a *small* supported action registry: cardinal movement, wait, a simple menu choice. Bind network work to a proven game-input boundary. Qud can block inside input/prompt handling, so merely waiting for an event that cannot fire until input arrives is a deadlock. Resolve off-turn actions and prompts explicitly; an event subscription is not sufficient.
 

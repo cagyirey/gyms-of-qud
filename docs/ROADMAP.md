@@ -4,7 +4,7 @@ These are issue-ready work items, not remotely created GitHub issues.
 
 ## 1. Establish the installed-game compatibility target
 
-Input: reviewed install manifest, exact build, enabled mods/load order. Validate the redacted manifest/report with the typed compatibility contract, then add a minimal local diagnostic mod and a dedicated test profile. Acceptance: it loads and reports build, candidate hook availability and hook thread IDs without save modifications. Record API evidence; do not infer support from Raves' older build.
+Input: reviewed install manifest, exact build, enabled mods/load order. Validate the redacted manifest/report with the typed compatibility contract, then run the startup-only `mod/QudGymCompat` diagnostic in a dedicated profile. Acceptance: it reports exact marketing/core versions, active mod load order, and type-resolution evidence without save, input, or world mutation. Treat type resolution as distinct from runtime callback evidence; do not infer support from Raves' older build. A later passive callback phase must be separately reviewed and report its actual thread.
 
 ## 2. Implement read-only player-observation projection
 

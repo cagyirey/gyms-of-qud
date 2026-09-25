@@ -2,7 +2,7 @@
 
 Foundations for a **decision-boundary Caves of Qud environment**, for finite-candidate policies, tool-assisted search, and NeMo evaluation/RL workflows.
 
-**This first slice runs a small mock environment, not Caves of Qud.** It contains no game assets, trained model, complete mod, or functioning live-game snapshot implementation. The repository is `cagyirey/gyms-of-qud`; the Python package and API are named `qudgym`/QudGym.
+**This first slice runs a small mock environment, not Caves of Qud.** It contains no game assets, trained model, functioning live-game control, or functioning live-game snapshot implementation. It does include a startup-only read-only compatibility diagnostic mod. The repository is `cagyirey/gyms-of-qud`; the Python package and API are named `qudgym`/QudGym.
 
 ## What works now
 
@@ -13,6 +13,8 @@ Foundations for a **decision-boundary Caves of Qud environment**, for finite-can
 | Bounded snapshot/restore, full mock-state hash, stale-cursor rejection | Implemented and locally tested; mock only |
 | Authenticated localhost RPC, request correlation, bounded deduplication, client | Implemented and locally tested, including real loopback HTTP |
 | Candidate-scoring interface and JSONL trajectories | Implemented and locally tested |
+| ATOF session recording, NeMo ATIF conversion, optional GenAI OTel projection | Implemented for mock/session boundary; live Qud not connected |
+| Startup-only read-only Qud compatibility diagnostic mod | Source and exact-install compile checked; game-log run pending |
 | NeMo Gym native GymnasiumServer adapter and gymnasium_agent recipe | Source-reviewed scaffold; NeMo runtime smoke test outstanding |
 | C# game-thread handoff/decision-boundary queue | Smoke-tested on .NET 10; not loaded by the game |
 | Installed-game manifest collector | Implemented and locally tested on synthetic files |
@@ -28,6 +30,8 @@ source .venv/bin/activate
 python -m pip install -e '.[dev]'
 python -m pytest -q
 qudgym smoke
+mkdir -p local
+qudgym smoke --atof local/mock-session.atof.jsonl
 python examples/branch_and_replay.py
 ```
 
@@ -59,12 +63,25 @@ The service listens only on `127.0.0.1`. `--oracle` is explicit: player workers 
 
 ### Record a rollout
 
+The legacy research JSONL remains available:
+
 ```bash
 mkdir -p runs
 qudgym smoke --record runs/mock-seed7.jsonl
 ```
 
-Records retain candidate IDs, before/after observations, rewards, terminal causes, task/objective versions and control metadata. They are research trajectories, **not** on-policy training batches containing fabricated token IDs or log probabilities.
+For interoperable session recording, use the bounded ATOF stream:
+
+```bash
+qudgym smoke --atof runs/mock-seed7.atof.jsonl
+qudgym atof-validate runs/mock-seed7.atof.jsonl
+qudgym export-atif runs/mock-seed7.atof.jsonl --output runs/mock-seed7.atif.json
+```
+
+ATIF export uses NVIDIA NeMo's converter; the optional direct GenAI OTel
+projection is documented in the [recording guide](docs/RECORDING.md). Both
+formats are session/environment telemetry, not fabricated token or logprob
+training batches. No live Qud session is implied.
 
 ## Agent-eye replay and representative builds
 
@@ -115,6 +132,7 @@ See [publication notes](docs/PUBLISH.md). No local game data belongs in commits.
 
 - [Protocol and invariants](docs/PROTOCOL.md)
 - [Compatibility evidence workflow](docs/COMPATIBILITY.md)
+- [Session recording and observability](docs/RECORDING.md)
 - [Live Qud integration checklist](docs/LOCAL_INTEGRATION.md)
 - [Implementation backlog](docs/ROADMAP.md)
 - [Primary-source inspection record](docs/SOURCES.md)
