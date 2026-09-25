@@ -64,7 +64,7 @@ def main():
         print(json.dumps({
             "kind": "atif-trajectory",
             "schema_version": trajectory.get("schema_version"),
-            "step_count": len(trajectory.get("steps", [])),
+            "step_count": len(trajectory.get("steps") or []),
         }, sort_keys=True))
     elif args.command.startswith("eye-"):
         from .eye.cli import run
