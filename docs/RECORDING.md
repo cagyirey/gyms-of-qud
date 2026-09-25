@@ -68,8 +68,9 @@ GenAI semantic-convention spans through the host's OpenTelemetry API provider:
 - `qudgym.step` → `execute_tool`.
 
 The function does not configure a global provider, choose an OTLP endpoint,
-send network data, or calculate token/cost metrics. The host owns the SDK and
-exporter. Install only the API for a host that already provides the SDK:
+send network data, or calculate token/cost metrics. The host owns the provider
+and exporter. Install the API/SDK pair for a standalone runner (or keep the
+API-only dependency when the host already provides the SDK):
 
 ```bash
 python -m pip install 'qudgym[telemetry]'
