@@ -306,8 +306,8 @@ if not all(row.get("info", {}).get("is_mock") is True for row in rollouts):
     raise SystemExit("NeMo Gym rollout lost the explicit is_mock=true boundary")
 if not all(row.get("agent_ref", {}).get("name") == "qudgym_agent" for row in rollouts):
     raise SystemExit("NeMo Gym rollout used an unexpected agent instance")
-if not profile_rows:
-    raise SystemExit("reward profile produced no rows")
+if len(profile_rows) != 1:
+    raise SystemExit(f"expected one reward profile row, found {len(profile_rows)}")
 for row in profile_rows:
     if row.get("num_rollouts") != repeats or row.get("expected_num_rollouts") != repeats:
         raise SystemExit("reward profile did not contain every requested repeat")
