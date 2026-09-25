@@ -24,6 +24,16 @@ This writes `resources_servers/qudgym` only if it does not exist. The generated 
 
 The included `configs/qudgym.yaml` uses the upstream `gymnasium_agent`, references your existing `policy_model`, and includes a small example dataset. Merge it with your pinned NeMo model-server configuration using that release's normal launcher. We have intentionally not guessed a deployment-specific NeMo CLI command, NIM endpoint, model name, image tag or GPU topology.
 
+## Recording and observability
+
+The environment-side session boundary is documented in
+[`docs/RECORDING.md`](../../docs/RECORDING.md). It emits ATOF 0.1 and can be
+projected to ATIF through NeMo or to GenAI OTel spans. Keep model/LLM event
+ownership in the upstream `gymnasium_agent`/NeMo runtime; do not add a second
+token-accounting or telemetry layer in this adapter. The current mock adapter
+does not yet wire a recorder automatically, so any rollout artifact must be
+reviewed as mock telemetry rather than a live Qud evaluation.
+
 ## Acceptance before declaring support
 
 Run one scripted five-decision mock trajectory through the actual NeMo server/agent, then a model-driven rollout. Check session cookies, invalid-action behavior, cleanup on model failure/horizon/normal completion, and infrastructure-error reporting. Inspect the resulting rollout artifacts to confirm preserved model outputs/token accounting. Then run one real Qud task only after the live adapter exists.
