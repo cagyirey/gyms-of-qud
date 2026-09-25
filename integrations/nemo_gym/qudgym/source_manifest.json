@@ -1,0 +1,11 @@
+{
+  "algorithm": "sha256",
+  "files": {
+    "app.py": "e6c8c067f722e591b05bdd9e172bf6d815eb25e0518570d6e06bd8d04d725424",
+    "configs/agent_eye.yaml": "13e1dd99dc547d1987ef5477469022a59eb18ab3618fdac50c7007cf6a42536a",
+    "configs/qudgym.yaml": "8e3d48904f21232d3d7871937d72a8afb3bc84f84fcd5ee1bae78fc6e1fde922",
+    "data/agent_eye_example.jsonl": "6ccfc0c0a69301d91669106a2fcaaf4dc3c3f6ee083391838febd53b68b67c10",
+    "data/example.jsonl": "6683a8c9bea18c6fcde2281edf9221bcc5c1a5fab69a00b6b5049be65bc2047f",
+    "task_data.py": "8c0ceae816f5071f27f8e70fbff7698e126c918cb147d38c9d1dda706aa3e2e1"
+  }
+}

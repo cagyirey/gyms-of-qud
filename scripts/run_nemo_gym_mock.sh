@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Delegate a bounded mock rollout entirely to a pinned NeMo Gym checkout.
 set -euo pipefail
+umask 077
 
 usage() {
   cat >&2 <<'EOF'
@@ -10,7 +11,8 @@ Required environment:
   NEMO_GYM_ROOT             Pinned NVIDIA-NeMo/Gym checkout
   NEMO_GYM_MODEL            Served model name returned by /v1/models
   NEMO_GYM_MODEL_URL        Existing model base URL, including /v1
-  NEMO_GYM_MODEL_API_KEY    Key matching the model endpoint
+  NEMO_GYM_MODEL_API_KEY    Key matching the model endpoint (or use the *_ENV form)
+  NEMO_GYM_MODEL_API_KEY_ENV  Environment variable name holding the model key
 
 Optional environment:
   NEMO_GYM_MODEL_TYPE       Defaults to vllm_model
@@ -19,6 +21,7 @@ Optional environment:
   NEMO_GYM_CONCURRENCY      Defaults to 1
   NEMO_GYM_HEAD_PORT        Defaults to 11000
   NEMO_GYM_INPUT            Defaults to the staged example.jsonl
+  NEMO_GYM_REQUIRE_SUCCESS  Defaults to 1; set 0 only for a non-success mock task
   NEMO_GYM_ALLOW_COMMIT_DRIFT  Set to 1 only for an explicitly reviewed checkout
 EOF
 }
@@ -31,14 +34,35 @@ fi
 : "${NEMO_GYM_ROOT:?NEMO_GYM_ROOT is required}"
 : "${NEMO_GYM_MODEL:?NEMO_GYM_MODEL is required}"
 : "${NEMO_GYM_MODEL_URL:?NEMO_GYM_MODEL_URL is required}"
-: "${NEMO_GYM_MODEL_API_KEY:?NEMO_GYM_MODEL_API_KEY is required}"
-if [[ "$NEMO_GYM_MODEL_API_KEY" == *$'\n'* || "$NEMO_GYM_MODEL_API_KEY" == *$'\r'* ]]; then
-  echo "NEMO_GYM_MODEL_API_KEY must not contain a newline" >&2
+API_KEY_ENV=${NEMO_GYM_MODEL_API_KEY_ENV:-}
+if [[ -n "$API_KEY_ENV" ]]; then
+  if [[ ! "$API_KEY_ENV" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "NEMO_GYM_MODEL_API_KEY_ENV must be an environment variable name" >&2
+    exit 2
+  fi
+  API_KEY_VALUE=$(printenv "$API_KEY_ENV" || true)
+  if [[ -z "$API_KEY_VALUE" ]]; then
+    echo "The environment variable named by NEMO_GYM_MODEL_API_KEY_ENV is unset or empty" >&2
+    exit 2
+  fi
+else
+  : "${NEMO_GYM_MODEL_API_KEY:?NEMO_GYM_MODEL_API_KEY or NEMO_GYM_MODEL_API_KEY_ENV is required}"
+  API_KEY_VALUE=$NEMO_GYM_MODEL_API_KEY
+fi
+if [[ "$API_KEY_VALUE" == *$'\n'* || "$API_KEY_VALUE" == *$'\r'* ]]; then
+  echo "The model API key must not contain a newline" >&2
   exit 2
 fi
+# Keep the raw value out of process arguments and Hydra override files. NeMo Gym
+# resolves this environment-backed value in its native config parser.
+export NEMO_GYM_WRAPPER_POLICY_KEY="$API_KEY_VALUE"
+API_KEY_START_ARGS=("++policy_api_key=\${oc.env:NEMO_GYM_WRAPPER_POLICY_KEY}")
+API_KEY_EVAL_ARGS=("${API_KEY_START_ARGS[@]}")
 
 EXPECTED_COMMIT="1c8261080bdc881b3e9b7f870e6418f160516991"
+PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 NEMO_GYM_ROOT=$(cd "$NEMO_GYM_ROOT" && pwd -P)
+STAGED_ADAPTER="$NEMO_GYM_ROOT/resources_servers/qudgym"
 GYM_BIN=${NEMO_GYM_BIN:-"$NEMO_GYM_ROOT/.venv/bin/gym"}
 WAIT_SCRIPT="$NEMO_GYM_ROOT/scripts/wait_for_servers.sh"
 MODEL_TYPE=${NEMO_GYM_MODEL_TYPE:-vllm_model}
@@ -49,6 +73,7 @@ fi
 REPEATS=${NEMO_GYM_REPEATS:-2}
 CONCURRENCY=${NEMO_GYM_CONCURRENCY:-1}
 HEAD_PORT=${NEMO_GYM_HEAD_PORT:-11000}
+REQUIRE_SUCCESS=${NEMO_GYM_REQUIRE_SUCCESS:-1}
 MODEL_URL=${NEMO_GYM_MODEL_URL%/}
 OUTPUT_DIR=$1
 GYM_PID=""
@@ -60,6 +85,10 @@ if [[ ! "$REPEATS" =~ ^[0-9]+$ ]] || (( REPEATS < 2 )); then
 fi
 if [[ ! "$CONCURRENCY" =~ ^[0-9]+$ ]] || (( CONCURRENCY < 1 )); then
   echo "NEMO_GYM_CONCURRENCY must be a positive integer" >&2
+  exit 2
+fi
+if [[ "$REQUIRE_SUCCESS" != "0" && "$REQUIRE_SUCCESS" != "1" ]]; then
+  echo "NEMO_GYM_REQUIRE_SUCCESS must be 0 or 1" >&2
   exit 2
 fi
 if [[ ! "$HEAD_PORT" =~ ^[0-9]+$ ]] || (( HEAD_PORT < 1 || HEAD_PORT > 65535 )); then
@@ -74,10 +103,15 @@ if [[ ! -f "$WAIT_SCRIPT" ]]; then
   echo "Missing NeMo Gym readiness script: $WAIT_SCRIPT" >&2
   exit 2
 fi
-if [[ ! -f "$NEMO_GYM_ROOT/resources_servers/qudgym/app.py" ]]; then
+if [[ ! -f "$STAGED_ADAPTER/app.py" ]]; then
   echo "QudGym is not staged in $NEMO_GYM_ROOT; run scripts/stage_nemo_adapter.py first" >&2
   exit 2
 fi
+python3 "$PROJECT_ROOT/scripts/verify_nemo_adapter.py" \
+  --project-root "$PROJECT_ROOT" \
+  --check-staged \
+  --clean-caches \
+  --nemo-root "$NEMO_GYM_ROOT"
 
 ACTUAL_COMMIT=$(git -C "$NEMO_GYM_ROOT" rev-parse HEAD)
 if [[ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" && "${NEMO_GYM_ALLOW_COMMIT_DRIFT:-0}" != "1" ]]; then
@@ -85,10 +119,23 @@ if [[ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" && "${NEMO_GYM_ALLOW_COMMIT_DRIFT:-
   echo "Set NEMO_GYM_ALLOW_COMMIT_DRIFT=1 only after reviewing the API diff" >&2
   exit 2
 fi
-if [[ "${NEMO_GYM_ALLOW_COMMIT_DRIFT:-0}" != "1" ]] \
-  && { ! git -C "$NEMO_GYM_ROOT" diff --quiet || ! git -C "$NEMO_GYM_ROOT" diff --cached --quiet; }; then
-  echo "NeMo Gym checkout has tracked local changes; review them or set the explicit drift override" >&2
-  exit 2
+if [[ "${NEMO_GYM_ALLOW_COMMIT_DRIFT:-0}" != "1" ]]; then
+  if ! git -C "$NEMO_GYM_ROOT" diff --quiet || ! git -C "$NEMO_GYM_ROOT" diff --cached --quiet; then
+    echo "NeMo Gym checkout has tracked local changes; review them or set the explicit drift override" >&2
+    exit 2
+  fi
+  while IFS= read -r status_line; do
+    [[ -z "$status_line" ]] && continue
+    status_path=$status_line
+    case "$status_path" in
+      resources_servers/qudgym|resources_servers/qudgym/*) ;;
+      *)
+        echo "NeMo Gym checkout has an unexpected untracked path: $status_path" >&2
+        echo "Only the verified resources_servers/qudgym staging tree is allowed" >&2
+        exit 2
+        ;;
+    esac
+  done < <(git -C "$NEMO_GYM_ROOT" status --porcelain --untracked-files=all | awk '$1 == "??" {print substr($0, 4)}')
 fi
 
 mkdir -p "$(dirname "$OUTPUT_DIR")"
@@ -113,9 +160,25 @@ if [[ ! -f "$INPUT" ]]; then
   exit 2
 fi
 
-curl -fsS --connect-timeout 5 --max-time 15 \
-  -H "Authorization: Bearer $NEMO_GYM_MODEL_API_KEY" \
-  "$MODEL_URL/models" >"$OUTPUT_DIR/model-models.json"
+export NEMO_GYM_WRAPPER_MODEL_KEY="$API_KEY_VALUE"
+python3 - "$MODEL_URL/models" >"$OUTPUT_DIR/model-models.json" <<'PY'
+import os
+import sys
+import urllib.request
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+request = urllib.request.Request(
+    sys.argv[1],
+    headers={"Authorization": f"Bearer {os.environ['NEMO_GYM_WRAPPER_MODEL_KEY']}"},
+)
+opener = urllib.request.build_opener(NoRedirect)
+with opener.open(request, timeout=15) as response:
+    sys.stdout.buffer.write(response.read())
+PY
+unset NEMO_GYM_WRAPPER_MODEL_KEY
 
 terminate_group() {
   local signal=$1
@@ -134,21 +197,25 @@ terminate_group() {
   fi
 }
 
+group_alive() {
+  [[ -n "${GYM_PGID:-}" ]] && kill -0 -- "-$GYM_PGID" 2>/dev/null
+}
+
 cleanup() {
   trap - EXIT INT TERM
-  if [[ -n "$GYM_PID" ]] && { [[ -n "$GYM_PGID" ]] || kill -0 "$GYM_PID" 2>/dev/null; }; then
+  if [[ -n "$GYM_PID" ]] && { group_alive || kill -0 "$GYM_PID" 2>/dev/null; }; then
     terminate_group INT "$GYM_PID"
     for _ in $(seq 1 30); do
-      if ! kill -0 "$GYM_PID" 2>/dev/null; then
+      if ! group_alive && ! kill -0 "$GYM_PID" 2>/dev/null; then
         break
       fi
       sleep 1
     done
-    if kill -0 "$GYM_PID" 2>/dev/null; then
+    if group_alive || kill -0 "$GYM_PID" 2>/dev/null; then
       terminate_group TERM "$GYM_PID"
       sleep 2
     fi
-    if kill -0 "$GYM_PID" 2>/dev/null; then
+    if group_alive || kill -0 "$GYM_PID" 2>/dev/null; then
       terminate_group KILL "$GYM_PID"
     fi
     wait "$GYM_PID" 2>/dev/null || true
@@ -156,17 +223,28 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+EXPORTER_OVERRIDES=(
+  "++wandb_project=null"
+  "++wandb_name=null"
+  "++wandb_api_key=null"
+  "++mlflow_tracking_uri=null"
+  "++mlflow_tracking_token=null"
+  "++mlflow_experiment_name=null"
+  "++mlflow_run_name=null"
+)
+
 START_ARGS=(
   env start
   --resources-server qudgym
   --model-type "$MODEL_TYPE"
   --model "$NEMO_GYM_MODEL"
   --model-url "$MODEL_URL"
-  --model-api-key "$NEMO_GYM_MODEL_API_KEY"
+  "${API_KEY_START_ARGS[@]}"
   "++head_server.port=$HEAD_PORT"
   "++observability_enabled=true"
   "++model_call_capture_dir=$CAPTURE_DIR"
   "++upload_rollouts=false"
+  "${EXPORTER_OVERRIDES[@]}"
 )
 if [[ "$MODEL_TYPE" == "vllm_model" && "${NEMO_GYM_USES_REASONING_PARSER:-false}" != "true" ]]; then
   START_ARGS+=("++policy_model.responses_api_models.vllm_model.uses_reasoning_parser=false")
@@ -183,10 +261,8 @@ except PermissionError:
 os.execv(sys.argv[1], sys.argv[1:])
 PY
 GYM_PID=$!
-GYM_PGID=$(ps -o pgid= -p "$GYM_PID" 2>/dev/null | tr -d ' ')
-if [[ "$GYM_PGID" != "$GYM_PID" ]]; then
-  GYM_PGID=""
-fi
+# The launcher calls setsid/setpgid before exec, so its PID is the dedicated PGID.
+GYM_PGID=$GYM_PID
 bash "$WAIT_SCRIPT" "$GYM_PID" "$HEAD_PORT" "${NEMO_GYM_READY_TIMEOUT_SECONDS:-240}"
 
 "$GYM_BIN" eval run --no-serve \
@@ -203,6 +279,8 @@ bash "$WAIT_SCRIPT" "$GYM_PID" "$HEAD_PORT" "${NEMO_GYM_READY_TIMEOUT_SECONDS:-2
   "++observability_enabled=true" \
   "++model_call_capture_dir=$CAPTURE_DIR" \
   "++upload_rollouts=false" \
+  "${API_KEY_EVAL_ARGS[@]}" \
+  "${EXPORTER_OVERRIDES[@]}" \
   >"$OUTPUT_DIR/gym-eval-run.log" 2>&1
 
 "$GYM_BIN" eval profile \
@@ -210,22 +288,41 @@ bash "$WAIT_SCRIPT" "$GYM_PID" "$HEAD_PORT" "${NEMO_GYM_READY_TIMEOUT_SECONDS:-2
   --rollouts "$ROLLOUTS" \
   >"$OUTPUT_DIR/gym-eval-profile.log" 2>&1
 
-python3 - "$ROLLOUTS" "$AGGREGATE" "$PROFILE" "$QUALITY" "$SUMMARY" <<'PY'
+python3 - "$ROLLOUTS" "$AGGREGATE" "$PROFILE" "$QUALITY" "$SUMMARY" "$REPEATS" "$REQUIRE_SUCCESS" <<'PY'
 import json
 import pathlib
 import sys
 
-rollouts_path, aggregate_path, profile_path, quality_path, summary_path = map(pathlib.Path, sys.argv[1:])
+rollouts_path, aggregate_path, profile_path, quality_path, summary_path = map(pathlib.Path, sys.argv[1:6])
+repeats = int(sys.argv[6])
+require_success = sys.argv[7] == "1"
 rollouts = [json.loads(line) for line in rollouts_path.read_text(encoding="utf-8").splitlines() if line]
 aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
 profile_rows = [json.loads(line) for line in profile_path.read_text(encoding="utf-8").splitlines() if line]
 quality = json.loads(quality_path.read_text(encoding="utf-8"))
-if not rollouts:
-    raise SystemExit("NeMo Gym produced no rollout rows")
+if len(rollouts) != repeats:
+    raise SystemExit(f"expected {repeats} rollout rows, found {len(rollouts)}")
 if not all(row.get("info", {}).get("is_mock") is True for row in rollouts):
     raise SystemExit("NeMo Gym rollout lost the explicit is_mock=true boundary")
 if not all(row.get("agent_ref", {}).get("name") == "qudgym_agent" for row in rollouts):
     raise SystemExit("NeMo Gym rollout used an unexpected agent instance")
+if not profile_rows:
+    raise SystemExit("reward profile produced no rows")
+for row in profile_rows:
+    if row.get("num_rollouts") != repeats or row.get("expected_num_rollouts") != repeats:
+        raise SystemExit("reward profile did not contain every requested repeat")
+    if row.get("missing_num_rollouts") != 0 or row.get("reward_profile_completion_pct") != 100.0:
+        raise SystemExit("reward profile reported incomplete repeats")
+if require_success:
+    for row in rollouts:
+        info = row.get("info", {})
+        if row.get("reward") != 1.0 or row.get("terminated") is not True or row.get("truncated") is not False:
+            raise SystemExit("mock rollout did not terminate successfully")
+        if info.get("outcome") != "success" or info.get("turns_elapsed") != 4 or info.get("decisions_elapsed") != 5:
+            raise SystemExit("mock rollout did not match the bounded success contract")
+    for row in profile_rows:
+        if row.get("mean/reward") != 1.0 or row.get("mean/terminated") != 1.0 or row.get("mean/truncated") != 0.0:
+            raise SystemExit("reward profile did not preserve the success contract")
 native_key_metrics = {
     entry.get("agent_ref", {}).get("name", "unknown"): entry.get("key_metrics", {})
     for entry in aggregate
@@ -234,6 +331,9 @@ summary = {
     "is_mock": True,
     "live_qud": False,
     "upload_rollouts": False,
+    "external_exporters_disabled": True,
+    "success_contract_enforced": require_success,
+    "expected_rollout_count": repeats,
     "rollout_count": len(rollouts),
     "profile_row_count": len(profile_rows),
     "native_health_verdicts": quality.get("run", {}).get("verdicts"),

@@ -71,6 +71,7 @@ jobs:
             fi
           }
           trap cleanup EXIT
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
           nemo-gym/.venv/bin/uvicorn \
             --app-dir "$GITHUB_WORKSPACE" \
             tests.fixtures.nemo_gym_scripted_model:app \
@@ -86,7 +87,8 @@ jobs:
           NEMO_GYM_MODEL=qudgym-scripted-smoke \
           NEMO_GYM_MODEL_URL=http://127.0.0.1:18081/v1 \
           NEMO_GYM_MODEL_API_KEY=dummy \
-          NEMO_GYM_MODEL_TYPE=openai_model \
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          NEMO_GYM_MODEL_TYPE=vllm_model \
           NEMO_GYM_REPEATS=2 \
           NEMO_GYM_CONCURRENCY=1 \
           NEMO_GYM_HEAD_PORT=18080 \

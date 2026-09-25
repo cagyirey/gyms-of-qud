@@ -7,13 +7,20 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import time
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI()
 _response_ids = itertools.count(1)
+
+
+def _check_auth(request: Request) -> None:
+    expected = os.environ.get("NEMO_GYM_SCRIPTED_MODEL_KEY", "dummy")
+    if request.headers.get("authorization") != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="invalid fixture credential")
 
 
 def _text(value: Any) -> str | None:
@@ -69,12 +76,14 @@ async def health() -> dict[str, bool]:
 
 
 @app.get("/v1/models")
-async def models() -> dict[str, Any]:
+async def models(request: Request) -> dict[str, Any]:
+    _check_auth(request)
     return {"object": "list", "data": [{"id": "qudgym-scripted-smoke", "object": "model"}]}
 
 
 @app.post("/v1/responses")
 async def responses(request: Request) -> dict[str, Any]:
+    _check_auth(request)
     body = await request.json()
     response_number = next(_response_ids)
     output = _select_action(body)
@@ -105,6 +114,7 @@ async def responses(request: Request) -> dict[str, Any]:
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request) -> dict[str, Any]:
+    _check_auth(request)
     body = await request.json()
     output = _select_action({"input": body.get("messages", [])})
     return {
