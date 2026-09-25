@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import runpy
 import shutil
 import subprocess
@@ -142,6 +143,97 @@ def test_nemo_manifest_rejects_extra_source_files(tmp_path):
     (adapter / 'unexpected.py').write_text('shadow = True\n')
     with pytest.raises(ValueError, match='source adapter tree does not match manifest'):
         VERIFY['verify_source'](project)
+
+
+def test_mlflow_opt_in_requires_tracking_uri_before_lifecycle(tmp_path):
+    env = os.environ.copy()
+    for key in tuple(env):
+        if key.startswith('NEMO_GYM_MLFLOW_'):
+            env.pop(key)
+    env.update({
+        'NEMO_GYM_ROOT': str(ROOT),
+        'NEMO_GYM_MODEL': 'contract-smoke',
+        'NEMO_GYM_MODEL_URL': 'http://127.0.0.1:1/v1',
+        'NEMO_GYM_MODEL_API_KEY': 'dummy',
+        'NEMO_GYM_MLFLOW_ENABLED': '1',
+    })
+    result = subprocess.run(
+        [str(ROOT / 'scripts/run_nemo_gym_mock.sh'), str(tmp_path / 'output')],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert 'NEMO_GYM_MLFLOW_TRACKING_URI is required' in result.stderr
+    assert 'dummy' not in result.stderr
+
+
+def test_mlflow_rejects_credentials_in_tracking_uri(tmp_path):
+    env = os.environ.copy()
+    for key in tuple(env):
+        if key.startswith('NEMO_GYM_MLFLOW_'):
+            env.pop(key)
+    env.update({
+        'NEMO_GYM_ROOT': str(ROOT),
+        'NEMO_GYM_MODEL': 'contract-smoke',
+        'NEMO_GYM_MODEL_URL': 'http://127.0.0.1:1/v1',
+        'NEMO_GYM_MODEL_API_KEY': 'dummy',
+        'NEMO_GYM_MLFLOW_ENABLED': '1',
+        'NEMO_GYM_MLFLOW_TRACKING_URI': 'https://user:test-secret@example.invalid',
+        'NEMO_GYM_MLFLOW_EXPERIMENT_NAME': 'contract',
+        'NEMO_GYM_MLFLOW_RUN_NAME': 'contract',
+    })
+    result = subprocess.run(
+        [str(ROOT / 'scripts/run_nemo_gym_mock.sh'), str(tmp_path / 'output')],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert 'must not contain userinfo, query, or fragment credentials' in result.stderr
+    assert 'test-secret' not in result.stderr
+
+
+def test_mlflow_rollout_upload_requires_explicit_mlflow_enable(tmp_path):
+    env = os.environ.copy()
+    for key in tuple(env):
+        if key.startswith('NEMO_GYM_MLFLOW_'):
+            env.pop(key)
+    env.update({
+        'NEMO_GYM_ROOT': str(ROOT),
+        'NEMO_GYM_MODEL': 'contract-smoke',
+        'NEMO_GYM_MODEL_URL': 'http://127.0.0.1:1/v1',
+        'NEMO_GYM_MODEL_API_KEY': 'dummy',
+        'NEMO_GYM_MLFLOW_UPLOAD_ROLLOUTS': '1',
+    })
+    result = subprocess.run(
+        [str(ROOT / 'scripts/run_nemo_gym_mock.sh'), str(tmp_path / 'output')],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert 'requires NEMO_GYM_MLFLOW_ENABLED=1' in result.stderr
+
+
+def test_mlflow_compose_service_is_opt_in_and_local():
+    root_compose = (ROOT / 'compose.yaml').read_text(encoding='utf-8')
+    service = (ROOT / 'compose/observability/mlflow.yaml').read_text(encoding='utf-8')
+    assert 'compose/observability/mlflow.yaml' in root_compose
+    assert 'profiles:\n      - tracking' in service
+    assert 'ghcr.io/mlflow/mlflow@sha256:' in service
+    assert '127.0.0.1:${QUDGYM_MLFLOW_PORT:-5001}:8080' in service
+    assert '--artifacts-destination' in service
+    assert 'mlflow-data:/mlflow' in service
+    assert 'healthcheck:' in service
+    assert 'password' not in service.lower()
+    assert '/Users/' not in service
 
 
 def test_generated_schemas_are_current():

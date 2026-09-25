@@ -1,0 +1,13 @@
+name: qudgym
+
+# Auxiliary services for local native NeMo Gym validation.
+#
+# The default lifecycle remains host-native. Start the opt-in tracking profile
+# explicitly when a local MLflow REST endpoint is needed:
+#
+#   docker compose --profile tracking up -d --wait mlflow
+#
+# The wrapper talks to the loopback port, or to http://mlflow:8080 when it is
+# running inside a container on this Compose network.
+include:
+  - compose/observability/mlflow.yaml
