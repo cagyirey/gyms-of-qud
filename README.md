@@ -131,9 +131,13 @@ The first model target is an externally served small quantized vLLM checkpoint;
 quantization belongs to the vLLM launch/checkpoint, while NeMo Gym's
 `vllm_model` owns the Responses-to-Chat-Completions boundary. The wrapper
 verifies the staged adapter manifest, constrains the resource server to one
-process worker, disables W&B/MLflow exporters, and enforces the bounded mock
-success/profile contract by default. A deterministic native contract smoke has
-passed; no real local-model, Platform upload, or training run is claimed yet.
+process worker, disables W&B and MLflow by default, and enforces the bounded
+mock success/profile contract. Native MLflow config/metrics export is an explicit
+opt-in; raw rollout export remains a separate opt-in. A local MLflow REST sink
+can be started with the repository's opt-in Compose profile
+(`docker compose --profile tracking up -d --wait mlflow`). A deterministic native
+contract smoke has passed; no real local-model, Platform upload, or training run
+is claimed yet.
 
 The generic finite-candidate scorer remains separate: a pointer-head decision
 model is not assumed to be supported by every NIM or generative RL recipe.

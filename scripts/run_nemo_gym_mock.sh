@@ -22,6 +22,12 @@ Optional environment:
   NEMO_GYM_HEAD_PORT        Defaults to 11000
   NEMO_GYM_INPUT            Defaults to the staged example.jsonl
   NEMO_GYM_REQUIRE_SUCCESS  Defaults to 1; set 0 only for a non-success mock task
+  NEMO_GYM_MLFLOW_ENABLED  Defaults to 0; set 1 for native MLflow metrics/config
+  NEMO_GYM_MLFLOW_TRACKING_URI  MLflow tracking URI when enabled; no userinfo/query/fragment
+  NEMO_GYM_MLFLOW_EXPERIMENT_NAME  MLflow experiment name when enabled
+  NEMO_GYM_MLFLOW_RUN_NAME  MLflow run name when enabled
+  NEMO_GYM_MLFLOW_TOKEN_ENV  Optional env var name holding an MLflow token
+  NEMO_GYM_MLFLOW_UPLOAD_ROLLOUTS  Defaults to 0; raw rows require explicit opt-in
   NEMO_GYM_ALLOW_COMMIT_DRIFT  Set to 1 only for an explicitly reviewed checkout
 EOF
 }
@@ -53,6 +59,13 @@ if [[ "$API_KEY_VALUE" == *$'\n'* || "$API_KEY_VALUE" == *$'\r'* ]]; then
   echo "The model API key must not contain a newline" >&2
   exit 2
 fi
+# Do not let the caller's source secret remain inherited by unrelated Gym child
+# processes. The wrapper-owned environment variable below is the only copy
+# needed by the native config parser.
+if [[ -n "$API_KEY_ENV" ]]; then
+  unset "$API_KEY_ENV"
+fi
+unset NEMO_GYM_MODEL_API_KEY
 # Keep the raw value out of process arguments and Hydra override files. NeMo Gym
 # resolves this environment-backed value in its native config parser.
 export NEMO_GYM_WRAPPER_POLICY_KEY="$API_KEY_VALUE"
@@ -74,6 +87,81 @@ REPEATS=${NEMO_GYM_REPEATS:-2}
 CONCURRENCY=${NEMO_GYM_CONCURRENCY:-1}
 HEAD_PORT=${NEMO_GYM_HEAD_PORT:-11000}
 REQUIRE_SUCCESS=${NEMO_GYM_REQUIRE_SUCCESS:-1}
+MLFLOW_ENABLED=${NEMO_GYM_MLFLOW_ENABLED:-0}
+MLFLOW_UPLOAD_ROLLOUTS=${NEMO_GYM_MLFLOW_UPLOAD_ROLLOUTS:-0}
+MLFLOW_TOKEN_ENV=${NEMO_GYM_MLFLOW_TOKEN_ENV:-}
+MLFLOW_TOKEN_VALUE=""
+if [[ "$MLFLOW_ENABLED" != "0" && "$MLFLOW_ENABLED" != "1" ]]; then
+  echo "NEMO_GYM_MLFLOW_ENABLED must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$MLFLOW_UPLOAD_ROLLOUTS" != "0" && "$MLFLOW_UPLOAD_ROLLOUTS" != "1" ]]; then
+  echo "NEMO_GYM_MLFLOW_UPLOAD_ROLLOUTS must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$MLFLOW_ENABLED" == "0" && "$MLFLOW_UPLOAD_ROLLOUTS" == "1" ]]; then
+  echo "NEMO_GYM_MLFLOW_UPLOAD_ROLLOUTS=1 requires NEMO_GYM_MLFLOW_ENABLED=1" >&2
+  exit 2
+fi
+if [[ "$MLFLOW_ENABLED" == "1" ]]; then
+  if [[ -z "${NEMO_GYM_MLFLOW_TRACKING_URI:-}" ]]; then
+    echo "NEMO_GYM_MLFLOW_TRACKING_URI is required when MLflow is enabled" >&2
+    exit 2
+  fi
+  if [[ -z "${NEMO_GYM_MLFLOW_EXPERIMENT_NAME:-}" ]]; then
+    echo "NEMO_GYM_MLFLOW_EXPERIMENT_NAME is required when MLflow is enabled" >&2
+    exit 2
+  fi
+  if [[ -z "${NEMO_GYM_MLFLOW_RUN_NAME:-}" ]]; then
+    echo "NEMO_GYM_MLFLOW_RUN_NAME is required when MLflow is enabled" >&2
+    exit 2
+  fi
+  for value in "$NEMO_GYM_MLFLOW_TRACKING_URI" "$NEMO_GYM_MLFLOW_EXPERIMENT_NAME" "$NEMO_GYM_MLFLOW_RUN_NAME"; do
+    if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+      echo "MLflow configuration values must not contain newlines" >&2
+      exit 2
+    fi
+  done
+  if ! python3 -c '
+import sys
+from urllib.parse import urlsplit
+
+uri = sys.stdin.read()
+parsed = urlsplit(uri)
+if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+    raise SystemExit(1)
+' <<< "$NEMO_GYM_MLFLOW_TRACKING_URI"; then
+    echo "NEMO_GYM_MLFLOW_TRACKING_URI must not contain userinfo, query, or fragment credentials" >&2
+    exit 2
+  fi
+  export NEMO_GYM_WRAPPER_MLFLOW_TRACKING_URI="$NEMO_GYM_MLFLOW_TRACKING_URI"
+  export NEMO_GYM_WRAPPER_MLFLOW_EXPERIMENT_NAME="$NEMO_GYM_MLFLOW_EXPERIMENT_NAME"
+  export NEMO_GYM_WRAPPER_MLFLOW_RUN_NAME="$NEMO_GYM_MLFLOW_RUN_NAME"
+  if [[ -n "$MLFLOW_TOKEN_ENV" ]]; then
+    if [[ ! "$MLFLOW_TOKEN_ENV" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "NEMO_GYM_MLFLOW_TOKEN_ENV must be an environment variable name" >&2
+      exit 2
+    fi
+    MLFLOW_TOKEN_VALUE=$(printenv "$MLFLOW_TOKEN_ENV" || true)
+    if [[ -z "$MLFLOW_TOKEN_VALUE" ]]; then
+      echo "The environment variable named by NEMO_GYM_MLFLOW_TOKEN_ENV is unset or empty" >&2
+      exit 2
+    fi
+    if [[ "$MLFLOW_TOKEN_VALUE" == *$'\n'* || "$MLFLOW_TOKEN_VALUE" == *$'\r'* ]]; then
+      echo "The MLflow token must not contain a newline" >&2
+      exit 2
+    fi
+    # Scope the secret to the eval subshell below; do not leave the caller's
+    # source variable inherited by env-start, profile, or model children.
+    unset "$MLFLOW_TOKEN_ENV"
+    MLFLOW_TOKEN_OVERRIDE=("++mlflow_tracking_token=\${oc.env:NEMO_GYM_WRAPPER_MLFLOW_TOKEN}")
+  else
+    MLFLOW_TOKEN_OVERRIDE=("++mlflow_tracking_token=null")
+  fi
+else
+  MLFLOW_UPLOAD_ROLLOUTS=0
+  MLFLOW_TOKEN_OVERRIDE=("++mlflow_tracking_token=null")
+fi
 MODEL_URL=${NEMO_GYM_MODEL_URL%/}
 OUTPUT_DIR=$1
 GYM_PID=""
@@ -223,15 +311,29 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-EXPORTER_OVERRIDES=(
+WANDB_OVERRIDES=(
   "++wandb_project=null"
   "++wandb_name=null"
   "++wandb_api_key=null"
+)
+MLFLOW_DISABLED_OVERRIDES=(
   "++mlflow_tracking_uri=null"
   "++mlflow_tracking_token=null"
   "++mlflow_experiment_name=null"
   "++mlflow_run_name=null"
 )
+if [[ "$MLFLOW_ENABLED" == "1" ]]; then
+  MLFLOW_OVERRIDES=(
+    "++mlflow_tracking_uri=\${oc.env:NEMO_GYM_WRAPPER_MLFLOW_TRACKING_URI}"
+    "++mlflow_experiment_name=\${oc.env:NEMO_GYM_WRAPPER_MLFLOW_EXPERIMENT_NAME}"
+    "++mlflow_run_name=\${oc.env:NEMO_GYM_WRAPPER_MLFLOW_RUN_NAME}"
+    "${MLFLOW_TOKEN_OVERRIDE[@]}"
+  )
+else
+  MLFLOW_OVERRIDES=("${MLFLOW_DISABLED_OVERRIDES[@]}")
+fi
+START_EXPORTER_OVERRIDES=("${WANDB_OVERRIDES[@]}" "${MLFLOW_DISABLED_OVERRIDES[@]}")
+EVAL_EXPORTER_OVERRIDES=("${WANDB_OVERRIDES[@]}" "${MLFLOW_OVERRIDES[@]}")
 
 START_ARGS=(
   env start
@@ -244,7 +346,7 @@ START_ARGS=(
   "++observability_enabled=true"
   "++model_call_capture_dir=$CAPTURE_DIR"
   "++upload_rollouts=false"
-  "${EXPORTER_OVERRIDES[@]}"
+  "${START_EXPORTER_OVERRIDES[@]}"
 )
 if [[ "$MODEL_TYPE" == "vllm_model" && "${NEMO_GYM_USES_REASONING_PARSER:-false}" != "true" ]]; then
   START_ARGS+=("++policy_model.responses_api_models.vllm_model.uses_reasoning_parser=false")
@@ -265,30 +367,37 @@ GYM_PID=$!
 GYM_PGID=$GYM_PID
 bash "$WAIT_SCRIPT" "$GYM_PID" "$HEAD_PORT" "${NEMO_GYM_READY_TIMEOUT_SECONDS:-240}"
 
-"$GYM_BIN" eval run --no-serve \
-  --agent qudgym_agent \
-  --input "$INPUT" \
-  --output "$ROLLOUTS" \
-  --limit 1 \
-  --num-repeats "$REPEATS" \
-  --concurrency "$CONCURRENCY" \
-  --temperature 0 \
-  --top-p 1 \
-  --max-output-tokens 256 \
-  "++head_server.port=$HEAD_PORT" \
-  "++observability_enabled=true" \
-  "++model_call_capture_dir=$CAPTURE_DIR" \
-  "++upload_rollouts=false" \
-  "${API_KEY_EVAL_ARGS[@]}" \
-  "${EXPORTER_OVERRIDES[@]}" \
-  >"$OUTPUT_DIR/gym-eval-run.log" 2>&1
+(
+  if [[ "$MLFLOW_ENABLED" == "1" && -n "$MLFLOW_TOKEN_ENV" ]]; then
+    export NEMO_GYM_WRAPPER_MLFLOW_TOKEN="$MLFLOW_TOKEN_VALUE"
+  fi
+  "$GYM_BIN" eval run --no-serve \
+    --agent qudgym_agent \
+    --input "$INPUT" \
+    --output "$ROLLOUTS" \
+    --limit 1 \
+    --num-repeats "$REPEATS" \
+    --concurrency "$CONCURRENCY" \
+    --temperature 0 \
+    --top-p 1 \
+    --max-output-tokens 256 \
+    "++head_server.port=$HEAD_PORT" \
+    "++observability_enabled=true" \
+    "++model_call_capture_dir=$CAPTURE_DIR" \
+    "++upload_rollouts=$MLFLOW_UPLOAD_ROLLOUTS" \
+    "${API_KEY_EVAL_ARGS[@]}" \
+    "${EVAL_EXPORTER_OVERRIDES[@]}" \
+    >"$OUTPUT_DIR/gym-eval-run.log" 2>&1
+)
 
 "$GYM_BIN" eval profile \
   --inputs "$MATERIALIZED" \
   --rollouts "$ROLLOUTS" \
+  "++upload_rollouts=false" \
+  "${START_EXPORTER_OVERRIDES[@]}" \
   >"$OUTPUT_DIR/gym-eval-profile.log" 2>&1
 
-python3 - "$ROLLOUTS" "$AGGREGATE" "$PROFILE" "$QUALITY" "$SUMMARY" "$REPEATS" "$REQUIRE_SUCCESS" <<'PY'
+python3 - "$ROLLOUTS" "$AGGREGATE" "$PROFILE" "$QUALITY" "$SUMMARY" "$REPEATS" "$REQUIRE_SUCCESS" "$MLFLOW_ENABLED" "$MLFLOW_UPLOAD_ROLLOUTS" <<'PY'
 import json
 import pathlib
 import sys
@@ -296,6 +405,8 @@ import sys
 rollouts_path, aggregate_path, profile_path, quality_path, summary_path = map(pathlib.Path, sys.argv[1:6])
 repeats = int(sys.argv[6])
 require_success = sys.argv[7] == "1"
+mlflow_requested = sys.argv[8] == "1"
+mlflow_upload_rollouts_requested = sys.argv[9] == "1"
 rollouts = [json.loads(line) for line in rollouts_path.read_text(encoding="utf-8").splitlines() if line]
 aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
 profile_rows = [json.loads(line) for line in profile_path.read_text(encoding="utf-8").splitlines() if line]
@@ -330,8 +441,10 @@ native_key_metrics = {
 summary = {
     "is_mock": True,
     "live_qud": False,
-    "upload_rollouts": False,
-    "external_exporters_disabled": True,
+    "wandb_disabled": True,
+    "mlflow_requested": mlflow_requested,
+    "mlflow_status": "requested_not_verified" if mlflow_requested else "not_requested",
+    "mlflow_upload_rollouts_requested": mlflow_upload_rollouts_requested,
     "success_contract_enforced": require_success,
     "expected_rollout_count": repeats,
     "rollout_count": len(rollouts),

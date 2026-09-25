@@ -104,6 +104,12 @@ def test_native_wrapper_delegates_to_nemo_gym_without_a_second_policy_loop():
         "mlflow_tracking_token=null",
         "mlflow_experiment_name=null",
         "mlflow_run_name=null",
+        "NEMO_GYM_MLFLOW_ENABLED",
+        "NEMO_GYM_MLFLOW_TRACKING_URI",
+        "NEMO_GYM_MLFLOW_EXPERIMENT_NAME",
+        "NEMO_GYM_MLFLOW_RUN_NAME",
+        "NEMO_GYM_MLFLOW_TOKEN_ENV",
+        "NEMO_GYM_MLFLOW_UPLOAD_ROLLOUTS",
         "expected_rollout_count",
         "reward_profile_completion_pct",
         "NEMO_GYM_MODEL_API_KEY_ENV",
@@ -120,6 +126,18 @@ def test_native_wrapper_delegates_to_nemo_gym_without_a_second_policy_loop():
     assert "scripts/run_nemo_gym_mock.sh" in workflow
     assert "GYM_PGID=$GYM_PID" in text
     assert 'kill -0 -- "-$GYM_PGID"' in text
+    assert '"++upload_rollouts=$MLFLOW_UPLOAD_ROLLOUTS"' in text
+    assert r'"++mlflow_tracking_uri=\${oc.env:NEMO_GYM_WRAPPER_MLFLOW_TRACKING_URI}"' in text
+    assert "START_EXPORTER_OVERRIDES" in text
+    assert "EVAL_EXPORTER_OVERRIDES" in text
+    assert '"${START_EXPORTER_OVERRIDES[@]}"' in text
+    assert 'unset "$MLFLOW_TOKEN_ENV"' in text
+    assert 'unset NEMO_GYM_MODEL_API_KEY' in text
+    assert text.index('unset "$MLFLOW_TOKEN_ENV"') < text.index('python3 - "$GYM_BIN" "${START_ARGS[@]}"')
+    assert '"wandb_disabled": True' in text
+    assert '"mlflow_requested": mlflow_requested' in text
+    assert '"mlflow_status": "requested_not_verified"' in text
+    assert '"mlflow_upload_rollouts_requested": mlflow_upload_rollouts_requested' in text
 
 
 def test_adapter_source_manifest_is_committed_and_contains_no_absolute_paths():

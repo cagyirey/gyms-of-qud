@@ -3,19 +3,33 @@
 ## Native NeMo Gym contract smoke — 2026-09-24–25
 
 - Installed and ran `NVIDIA-NeMo/Gym@1c8261080bdc881b3e9b7f870e6418f160516991` (`0.7.0rc0`, Python 3.13.14) from a clean temporary checkout.
-- Core Python suite: **171 passed, 1 skipped** in the default environment; the full pinned NeMo environment passed **172 passed, 1 skipped** after making the adapter tests compatible with the real imported Gym classes. The native CI job additionally stages the adapter and runs the full documented lifecycle against a test-only model fixture.
+- Core Python suite: **175 passed, 1 skipped** in the default environment; the full pinned NeMo environment passed **176 passed, 1 skipped** after making the adapter tests compatible with the real imported Gym classes. The native CI job additionally stages the adapter and runs the full documented lifecycle against a test-only model fixture.
 - The first startup exposed a real staging defect: the generated resource-server requirements installed QudGym but omitted the local editable NeMo Gym package, so the server venv failed on `ModuleNotFoundError: fastapi`. The staging helper now installs both local projects; this was not hidden or reclassified as a policy failure.
 - After that correction, NeMo Gym's actual resource server, upstream `gymnasium_agent`, and model server all started and passed the shipped readiness check.
 - Two rollouts were collected through `gym eval run --no-serve` using a deterministic test-only model. The native `openai_model` path and the intended external-server `vllm_model` Responses-to-Chat-Completions path each completed the same two repeats. Both returned reward `+1`, `outcome=success`, `is_mock=true`, four game turns, and five decisions.
-- NeMo Gym produced native `rollouts.jsonl`, materialized inputs, aggregate metrics, model-call capture, `ng_trajectory` attachments, and a complete reward-profile join for both repeats. The committed lifecycle wrapper completed the same two-repeat flow, explicitly disabled W&B/MLflow exporter setup and rollout export, enforced the repeat/success/profile contract, and wrote its compact summary. The environment-backed key mode was also exercised with a test-only key.
+- NeMo Gym produced native `rollouts.jsonl`, materialized inputs, aggregate metrics, model-call capture, `ng_trajectory` attachments, and a complete reward-profile join for both repeats. The committed lifecycle wrapper completed the same two-repeat flow, disabled W&B/MLflow exporter setup and rollout export by default, enforced the repeat/success/profile contract, and wrote its compact summary. The environment-backed key mode was also exercised with a test-only key.
 - Native NeMo Gym/Lens OpenTelemetry was not enabled in this smoke; the existing standalone GenAI OTel projection tests remain the only executed OTel path. No OTLP network export was attempted.
 - The closed-session replay cache is now globally bounded (256 sessions / 300 seconds by default), with unit coverage for eviction and expiry; terminal replay still succeeds inside that bound.
-- The wrapper uses a dedicated process group for Gym cleanup, rejects unexpected untracked NeMo paths, verifies the committed adapter source manifest, nulls W&B/MLflow exporter availability fields, and passes `upload_rollouts=false` to both Gym commands. This prevents ambient exporter configuration or raw mock content from being exported by the local workflow.
+- The wrapper uses a dedicated process group for Gym cleanup, rejects unexpected untracked NeMo paths, verifies the committed adapter source manifest, nulls W&B/MLflow exporter availability fields by default, and passes `upload_rollouts=false` by default. Native MLflow config/metrics export is now available only through an explicit operator opt-in; raw rollout upload remains separately gated.
 - Staging and execution enforce the pinned NeMo Gym commit and reject tracked or untracked local NeMo modifications unless the explicit drift override is set; the resource server is constrained to one process worker because its session/replay state is process-local.
 - Native rollout health reported both rows as `unobserved`, not healthy, because `gymnasium_agent` does not provide the producer turn/tool evidence required by several checks. This limitation remains explicit.
 - `gym eval export` rejected both rows because the current `gymnasium_agent` native trajectory contains coverage gaps. This confirms the documented strict boundary; no ATIF was fabricated and export remains non-gating.
 - This was a protocol/rollout contract smoke, not model-quality evidence. No small quantized model, Caves of Qud process, NeMo Platform mutation, Studio upload, live Qud API, save operation, or training job was executed.
 - NeMo Platform preflight found a listener on the canonical `:8080` with a non-200 readiness response, while a separate NeMo process was healthy on `:8090` and local configuration still pointed at `:8080`. No second platform was started, no configuration was rewritten, and no Studio/Intake mutation was attempted.
+
+## Native MLflow opt-in smoke — 2026-09-25
+
+- The native NeMo Gym MLflow exporter was exercised through the committed wrapper with the deterministic test-only model and two repeats against a local file-backed MLflow sink. It created one finished run, a `global_config.json` artifact, and native aggregate metrics; the wrapper summary recorded `mlflow_requested=true`, `mlflow_status=requested_not_verified`, and `mlflow_upload_rollouts_requested=false`.
+- The same opt-in path was exercised against the pinned `ghcr.io/mlflow/mlflow` Compose service. The service was started under the opt-in `tracking` profile, passed its healthcheck, and the run produced `global_config.json` but no `rollouts.json` while raw rollout upload remained disabled.
+- A separate local Compose smoke set `NEMO_GYM_MLFLOW_UPLOAD_ROLLOUTS=1` explicitly and verified that the upstream exporter then produced `rollouts.json`. This was local test data only and the Compose project/volume was removed afterward.
+- An environment-backed test-only MLflow token was accepted through `NEMO_GYM_MLFLOW_TOKEN_ENV`; the source variable was removed from the lifecycle environment, the downloaded native config artifact masked the token, and it did not contain the test model key. Credential-bearing tracking URIs are rejected before lifecycle startup. No real credential was read or recorded.
+- `docker compose config --quiet` and the tracking-profile service graph validated successfully. No remote MLflow endpoint, ATIF/Studio upload, live Qud process, or training run was executed.
+
+## OpenCode Go harness smoke — 2026-09-25
+
+- The configured `opencode-go/space-bunny-free` model was invoked through the official `opencode run --standalone --format json` harness with a synthetic mock observation and no private data. It returned a valid `move:E` action for the supplied decision ID.
+- This validates Go provider/harness reachability and response shape only. It is not a NeMo Gym rollout, model-quality benchmark, or Qud evaluation.
+- The Go endpoint was not wired directly to NeMo `vllm_model`: the required per-conversation `x-opencode-session` semantics and endpoint-family differences remain a separate integration decision. No credential value was inspected or recorded.
 
 ## Diagnostic and recording validation — 2026-09-24
 

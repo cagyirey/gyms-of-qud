@@ -143,8 +143,9 @@ The output directory is create-only. The wrapper:
 4. runs `gym eval run --no-serve` with temperature 0, top-p 1, and a 256-token
    output limit;
 5. runs native `gym eval profile`;
-6. disables W&B/MLflow exporter setup and rollout export with explicit native
-   config overrides, including `upload_rollouts=false`;
+6. disables W&B exporter setup and, by default, MLflow exporter setup and raw
+   rollout export with explicit native config overrides, including
+   `upload_rollouts=false`;
 7. requires the configured repeat count, terminal mock success, four turns,
    five decisions, and complete reward-profile joins by default;
 8. validates that every row is explicitly mock and routed through
@@ -176,14 +177,73 @@ The output includes:
 
 Do not point two concurrent jobs at one capture directory. NeMo Gym rollout IDs
 do not include an evaluation-run ID. The wrapper rejects unexpected untracked
-NeMo checkout paths, verifies the staged adapter manifest, and explicitly
-nulls W&B/MLflow exporter availability fields in both Gym commands. It also
-sets `upload_rollouts=false`, so neither exporter configuration/metrics nor raw
-rollout rows are sent by this local workflow. If remote experiment export is
-wanted, review the payload and re-enable it as a separate operator action.
-The wrapper uses `umask 077` for raw model-call captures and local artifacts.
-Do not reinterpret native health checks as healthy when they are `unobserved`;
-inspect the named coverage gaps and keep that limitation attached to the run.
+NeMo checkout paths and verifies the staged adapter manifest. By default it
+explicitly nulls W&B and MLflow exporter availability fields in the lifecycle
+commands and keeps `upload_rollouts=false`, so no remote experiment data is sent
+by this local workflow. The wrapper uses `umask 077` for raw model-call captures
+and local artifacts. Do not reinterpret native health checks as healthy when
+they are `unobserved`; inspect the named coverage gaps and keep that limitation
+attached to the run.
+
+### Optional native MLflow tracking
+
+For a local REST sink, this repository follows the Geodesic/Dennou modular
+Compose shape. The tracking profile is opt-in and is not part of the default
+mock lifecycle:
+
+```bash
+docker compose --profile tracking up -d --wait mlflow
+# Host-side wrapper (after the service reports healthy):
+NEMO_GYM_MLFLOW_TRACKING_URI=http://127.0.0.1:5001
+# Container-side client on the Compose network:
+# NEMO_GYM_MLFLOW_TRACKING_URI=http://mlflow:8080
+```
+
+The Compose service uses a pinned MLflow image, a named local volume, a loopback
+port binding (host port `5001` by default to avoid the common macOS port-5000
+conflict), and a healthcheck. Set `QUDGYM_MLFLOW_PORT` to choose another host
+port. It contains no credentials; use an operator-owned proxy or secret
+reference if the tracking endpoint needs auth.
+
+The tracking URI must not contain userinfo, query parameters, or a fragment;
+put credentials in the operator-owned token environment instead. MLflow is
+enabled only when the operator sets all of the following environment variables:
+
+```bash
+# Populate MLFLOW_TRACKING_TOKEN through the operator's secret manager if needed.
+NEMO_GYM_MLFLOW_ENABLED=1 \
+NEMO_GYM_MLFLOW_TRACKING_URI=http://127.0.0.1:5001 \
+NEMO_GYM_MLFLOW_EXPERIMENT_NAME=qudgym-mock \
+NEMO_GYM_MLFLOW_RUN_NAME=operator-approved-name \
+NEMO_GYM_MLFLOW_TOKEN_ENV=MLFLOW_TRACKING_TOKEN \
+NEMO_GYM_MLFLOW_UPLOAD_ROLLOUTS=0 \
+scripts/run_nemo_gym_mock.sh local/nemo-gym-mlflow
+```
+
+`NEMO_GYM_MLFLOW_TOKEN_ENV` is optional for an unauthenticated local server. When
+present, it is an environment-variable **name**, not a token; the wrapper keeps
+the value out of command arguments and Hydra override files, then removes the
+source variable from the lifecycle environment. Only the `gym eval run`
+subshell receives the scoped copy. The wrapper applies the same source-secret
+scrubbing to the model-key source selected by `NEMO_GYM_MODEL_API_KEY` or
+`NEMO_GYM_MODEL_API_KEY_ENV`. The native NeMo
+Gym MLflow exporter records the run configuration and aggregate metrics during
+`gym eval run`; that config artifact can contain local paths and endpoint
+metadata, so keep the sink local or review it before using a remote tracker.
+The wrapper summary records the MLflow request and rollout-upload request, not
+an independent exporter-success readback; inspect the native sink and logs for
+that confirmation. The `gym env start` process deliberately keeps MLflow disabled
+so it does not create an empty setup run. The separate `gym eval profile`
+command remains a local artifact check; it does not create a second MLflow run.
+W&B remains disabled.
+
+`NEMO_GYM_MLFLOW_UPLOAD_ROLLOUTS=0` is the safe default even when MLflow is
+enabled. Set it to `1` only after reviewing the native rollout export payload
+and the operator's retention/access policy; that upload is a separate data
+disclosure decision, not part of metrics tracking. The exporter's rollout view
+is upstream NeMo Gym's sanitized rollout record, not a new QudGym/ATIF format.
+A local MLflow sink can be used for validation without sending mock data to a
+remote service.
 
 ## Model-call evidence and OpenTelemetry
 

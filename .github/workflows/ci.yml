@@ -24,6 +24,8 @@ jobs:
       - run: qudgym schema --output /tmp/qudgym-ci-schemas
       - run: python examples/branch_and_replay.py
       - run: python -m compileall -q src scripts integrations
+      - name: Validate auxiliary Compose profile
+        run: docker compose -f compose.yaml --profile tracking config --quiet
       - run: qudgym eye-demo --preset listener --output /tmp/eye-demo.jsonl --html /tmp/eye-demo.html
       - run: qudgym eye-schema --output /tmp/eye-schemas
       - run: qudgym eye-builds builds/library.json
@@ -64,11 +66,14 @@ jobs:
         run: |
           set -euo pipefail
           MODEL_PID=""
+          MLFLOW_MODEL_PID=""
           cleanup() {
-            if [[ -n "$MODEL_PID" ]] && kill -0 "$MODEL_PID" 2>/dev/null; then
-              kill -TERM "$MODEL_PID" 2>/dev/null || true
-              wait "$MODEL_PID" 2>/dev/null || true
-            fi
+            for pid in "$MODEL_PID" "$MLFLOW_MODEL_PID"; do
+              if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                kill -TERM "$pid" 2>/dev/null || true
+                wait "$pid" 2>/dev/null || true
+              fi
+            done
           }
           trap cleanup EXIT
           NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
@@ -94,6 +99,63 @@ jobs:
           NEMO_GYM_HEAD_PORT=18080 \
           scripts/run_nemo_gym_mock.sh "$RUNNER_TEMP/qudgym-native-contract"
           test -f "$RUNNER_TEMP/qudgym-native-contract/summary.json"
+      - name: Run the native MLflow opt-in contract smoke
+        run: |
+          set -euo pipefail
+          MLFLOW_MODEL_PID=""
+          cleanup_mlflow() {
+            if [[ -n "$MLFLOW_MODEL_PID" ]] && kill -0 "$MLFLOW_MODEL_PID" 2>/dev/null; then
+              kill -TERM "$MLFLOW_MODEL_PID" 2>/dev/null || true
+              wait "$MLFLOW_MODEL_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_mlflow EXIT
+          rm -rf "$RUNNER_TEMP/qudgym-native-mlflow" "$RUNNER_TEMP/qudgym-native-mlflow-store"
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          nemo-gym/.venv/bin/uvicorn \
+            --app-dir "$GITHUB_WORKSPACE" \
+            tests.fixtures.nemo_gym_scripted_model:app \
+            --host 127.0.0.1 --port 18083 >"$RUNNER_TEMP/qudgym-mlflow-model.log" 2>&1 &
+          MLFLOW_MODEL_PID=$!
+          for _ in $(seq 1 50); do
+            if curl -sf http://127.0.0.1:18083/health >/dev/null; then break; fi
+            sleep 0.2
+          done
+          curl -sf http://127.0.0.1:18083/health >/dev/null
+          MLFLOW_ALLOW_FILE_STORE=true \
+          NEMO_GYM_ROOT="$GITHUB_WORKSPACE/nemo-gym" \
+          NEMO_GYM_MODEL=qudgym-scripted-smoke \
+          NEMO_GYM_MODEL_URL=http://127.0.0.1:18083/v1 \
+          NEMO_GYM_MODEL_API_KEY=dummy \
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          NEMO_GYM_MODEL_TYPE=vllm_model \
+          NEMO_GYM_REPEATS=2 \
+          NEMO_GYM_CONCURRENCY=1 \
+          NEMO_GYM_HEAD_PORT=18082 \
+          NEMO_GYM_MLFLOW_ENABLED=1 \
+          NEMO_GYM_MLFLOW_TRACKING_URI="file://$RUNNER_TEMP/qudgym-native-mlflow-store" \
+          NEMO_GYM_MLFLOW_EXPERIMENT_NAME=ci-native-mlflow \
+          NEMO_GYM_MLFLOW_RUN_NAME=ci-native-mlflow \
+          NEMO_GYM_MLFLOW_UPLOAD_ROLLOUTS=0 \
+          scripts/run_nemo_gym_mock.sh "$RUNNER_TEMP/qudgym-native-mlflow"
+          # Inspect the pinned file store directly; artifact listing through the
+          # client can select a remote repository for a file-backed run.
+          nemo-gym/.venv/bin/python - "$RUNNER_TEMP/qudgym-native-mlflow/summary.json" "$RUNNER_TEMP/qudgym-native-mlflow-store" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          summary = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert summary["mlflow_requested"] is True
+          assert summary["mlflow_status"] == "requested_not_verified"
+          assert summary["mlflow_upload_rollouts_requested"] is False
+          store = pathlib.Path(sys.argv[2])
+          run_meta = [path for path in store.rglob("meta.yaml") if "run_id:" in path.read_text(encoding="utf-8")]
+          assert len(run_meta) == 1
+          assert "status: 3" in run_meta[0].read_text(encoding="utf-8")
+          assert len(list(store.rglob("global_config.json"))) == 1
+          assert not list(store.rglob("rollouts.json"))
+          PY
       - name: Check the native lifecycle wrapper
         run: bash -n scripts/run_nemo_gym_mock.sh
 
