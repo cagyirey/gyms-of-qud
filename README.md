@@ -15,7 +15,7 @@ Foundations for a **decision-boundary Caves of Qud environment**, for finite-can
 | Candidate-scoring interface and JSONL trajectories | Implemented and locally tested |
 | ATOF session recording, NeMo ATIF conversion, optional GenAI OTel projection | Implemented for mock/session boundary; live Qud not connected |
 | Startup-only read-only Qud compatibility diagnostic mod | Source and exact-install compile checked; game-log run pending |
-| NeMo Gym native GymnasiumServer adapter and gymnasium_agent recipe | Source-reviewed scaffold; NeMo runtime smoke test outstanding |
+| NeMo Gym native GymnasiumServer adapter and `gymnasium_agent` recipe | Native server/agent/model contract smoke passed with a deterministic Responses fixture; real local-model inference pending |
 | C# game-thread handoff/decision-boundary queue | Smoke-tested on .NET 10; not loaded by the game |
 | Installed-game manifest collector | Implemented and locally tested on synthetic files |
 | Live Qud reset/observe/step, action enumeration, save/restore | Not implemented |
@@ -106,7 +106,35 @@ remaining live-game/NeMo checks.
 
 ## NeMo first
 
-See [the NeMo integration guide](integrations/nemo_gym/README.md). It extends upstream `GymnasiumServer` and uses `gymnasium_agent`, leaving rollout/token accounting and training to NeMo. The generic finite-candidate scorer remains separate: a pointer-head decision model is not assumed to be supported by every NIM or generative RL recipe.
+See [the native NeMo Gym guide](integrations/nemo_gym/README.md). The only
+rollout path is NVIDIA's `gym env start` -> `gym eval run --no-serve` ->
+`gym eval profile` flow through upstream `GymnasiumServer` and
+`gymnasium_agent`. A thin shell wrapper manages the CLI lifecycle; it does not
+select actions, perform inference, count tokens, train, or duplicate metrics.
+
+```bash
+python scripts/stage_nemo_adapter.py /path/to/NeMo-Gym
+/path/to/NeMo-Gym/.venv/bin/gym env validate \
+  --resources-server qudgym --model-type vllm_model \
+  --model contract-smoke --model-url http://127.0.0.1:8000/v1 \
+  --model-api-key dummy
+
+NEMO_GYM_ROOT=/path/to/NeMo-Gym \
+NEMO_GYM_MODEL=qudgym-policy \
+NEMO_GYM_MODEL_URL=http://127.0.0.1:8000/v1 \
+NEMO_GYM_MODEL_API_KEY=dummy \
+NEMO_GYM_REPEATS=5 \
+scripts/run_nemo_gym_mock.sh local/nemo-gym-policy
+```
+
+The first model target is an externally served small quantized vLLM checkpoint;
+quantization belongs to the vLLM launch/checkpoint, while NeMo Gym's
+`vllm_model` owns the Responses-to-Chat-Completions boundary. A deterministic
+native contract smoke has passed; no real local-model, Platform upload, or
+training run is claimed yet.
+
+The generic finite-candidate scorer remains separate: a pointer-head decision
+model is not assumed to be supported by every NIM or generative RL recipe.
 
 ## What is needed from a Qud installation
 

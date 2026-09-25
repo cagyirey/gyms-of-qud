@@ -36,9 +36,43 @@ qudgym atof-validate local/mock-session.atof.jsonl
 
 The path is intentionally create-only and belongs under ignored `local/` or
 another reviewed local output directory. The ATOF stream is the durable
-interchange boundary; it is not itself ATIF or OTLP.
+standalone interchange boundary; it is not itself ATIF or OTLP.
 
-## ATIF export
+## Native NeMo Gym recording boundary
+
+The NeMo Gym adapter does **not** instantiate `SessionRecorder` and does not
+call `llm_call()` or `export_genai_otel()`. A model-driven NeMo Gym rollout is
+owned by NVIDIA's rollout/runtime path:
+
+- `gym eval run` writes native rollout and materialized-input JSONL;
+- `gym eval profile` computes reward/variance artifacts offline;
+- `observability_enabled` plus `model_call_capture_dir` captures model calls and
+  projects `ng_trajectory` when evidence is sufficient;
+- NeMo Gym's optional Lens/OpenTelemetry configuration owns runtime spans and
+  metrics;
+- the model server owns provider-reported usage and optional training token
+  metadata.
+
+QudGym contributes only the environment transition and its explicit mock label
+to the resources-server response. It must not copy model prompts, completions,
+usage, token counts, cost, or OTel spans into an ATOF sidecar. The standalone
+`llm_call()` API remains available only to a runner that itself owns that model
+call.
+
+There are two distinct ATIF paths:
+
+1. `qudgym export-atif` converts a standalone QudGym ATOF stream through NeMo's
+   ATOF converter.
+2. `gym eval export` strictly converts complete native `ng_trajectory` evidence
+   to ATIF v1.7.
+
+They are not interchangeable. The current `gymnasium_agent` trajectory has
+coverage gaps, so native Gym-to-ATIF export is rejected for normal multi-step
+QudGym rollouts. Do not fabricate tool calls or drop evidence to make that
+conversion pass; keep native Gym JSONL as the authoritative mock artifact until
+the upstream trajectory contract supports the environment-observation shape.
+
+## Standalone ATOF-to-ATIF export
 
 ATIF conversion is delegated to NVIDIA NeMo Agent Toolkit's native
 `nat.atof.scripts.atof_to_atif_converter`; QudGym does not maintain a second
@@ -76,7 +110,7 @@ API-only dependency when the host already provides the SDK):
 python -m pip install 'qudgym[telemetry]'
 ```
 
-If a NeMo/Relay runtime is already present, prefer its native ATIF and
+If a NeMo Gym/Relay runtime is already present, prefer its native ATIF and
 OpenTelemetry exporters so the model/tool event stream has one owner. QudGym
 supplies the environment ATOF stream and correlation metadata rather than
 intercepting model prompts or implementing token accounting.

@@ -2,15 +2,19 @@
 qudgym_resources_server:
   resources_servers:
     qudgym:
+      allowed_agents: [gymnasium_agent]
       entrypoint: app.py
       domain: games
       verified: false
       description: Mock QudGym decision-boundary environment; no live Qud yet
+      value: Bounded decision-boundary smoke environment for native NeMo Gym
+      closed_step_cache_max_sessions: 256
+      closed_step_cache_ttl_seconds: 300.0
 qudgym_agent:
   responses_api_agents:
     gymnasium_agent:
       entrypoint: app.py
-      max_steps: 128
+      max_steps: 16
       resources_server:
         type: resources_servers
         name: qudgym_resources_server

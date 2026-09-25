@@ -35,9 +35,11 @@ errors, presentation faults, and reset-cookie collisions.
 
 No live Qud integration, official builds, game-rule fidelity, game legality checks,
 learned policy, learned belief updater, world model, Qud snapshot/fork, GPU or NIM
-inference, or native NeMo rollout was executed. Generic schema validation does not
-prove that a future game adapter sources its facts fairly. These tests constrain
-the synthetic producer and the shared evidence/presentation machinery.
+inference, or real local-model NeMo rollout was executed. A deterministic native
+Gym contract smoke was later run for the mock adapter; it does not establish
+model quality or live-game behavior. Generic schema validation does not prove that
+a future game adapter sources its facts fairly. These tests constrain the
+synthetic producer and the shared evidence/presentation machinery.
 
 Fresh branch GitHub Actions passed all five jobs: Python 3.11/3.12/3.13,
 BridgeCore on .NET 10, and the Chromium replay smoke test. C# source was not
