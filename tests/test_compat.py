@@ -74,7 +74,10 @@ def test_schema_command_exports_compatibility_contracts(tmp_path):
         check=True, capture_output=True, text=True,
     )
     assert (tmp_path / 'InstallManifest.schema.json').is_file()
+    assert (tmp_path / 'DiagnosticEvent.schema.json').is_file()
     assert (tmp_path / 'DiagnosticReport.schema.json').is_file()
+    assert (tmp_path / 'AtofScopeEvent.schema.json').is_file()
+    assert (tmp_path / 'AtofMarkEvent.schema.json').is_file()
 
 
 def test_compat_cli_prints_only_a_summary(tmp_path):

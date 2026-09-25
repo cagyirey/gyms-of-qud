@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <QudManaged Condition="'$(QudManaged)' == ''">$(QUDGYM_MANAGED)</QudManaged>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)../../local/qudgym-compat-build/</BaseOutputPath>
+  </PropertyGroup>
+
+  <Target Name="RequireQudManaged" BeforeTargets="ResolveReferences" Condition="'$(QudManaged)' == ''">
+    <Error Text="Set QudManaged or QUDGYM_MANAGED to the exact installed Qud Managed directory." />
+  </Target>
+
+  <ItemGroup>
+    <Compile Include="Diagnostic.cs" />
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(QudManaged)/Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(QudManaged)/Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(QudManaged)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
