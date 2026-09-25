@@ -5,17 +5,22 @@ import json
 import sys
 import types
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from qudgym.mock import MockBackend
 
 ROOT = Path(__file__).resolve().parents[1]
+_NEMO_STUBBED = False
 
 
 def _install_nemo_stubs():
+    global _NEMO_STUBBED
     if 'resources_servers.gymnasium.base' in sys.modules and hasattr(sys.modules['resources_servers.gymnasium.base'], 'extract_text'):
-        return
+        return _NEMO_STUBBED
 
     nemo = types.ModuleType('nemo_gym')
     base_resources = types.ModuleType('nemo_gym.base_resources_server')
@@ -71,6 +76,8 @@ def _install_nemo_stubs():
         'resources_servers.gymnasium': gymnasium_pkg,
         'resources_servers.gymnasium.base': gymnasium_base,
     })
+    _NEMO_STUBBED = True
+    return True
 
 
 def _load_app():
@@ -104,11 +111,29 @@ class _Action:
 
 def _server(**config):
     app = _load_app()
-    return app.QudGymServer(config=app.QudGymConfig(**config))
+    if _install_nemo_stubs():
+        return app.QudGymServer(config=app.QudGymConfig(**config))
+    from nemo_gym.server_utils import ServerClient
+    values = {
+        'host': '127.0.0.1',
+        'port': 0,
+        'entrypoint': 'app.py',
+        'name': 'qudgym-test',
+        **config,
+    }
+    return app.QudGymServer(
+        config=app.QudGymConfig(**values),
+        server_client=MagicMock(spec=ServerClient),
+    )
 
 
 def _action(action_id, decision_id):
     return _Action(json.dumps({'action_id': action_id, 'decision_id': decision_id}))
+
+
+def test_multiple_server_workers_are_rejected():
+    with pytest.raises(ValidationError):
+        _server(num_workers=2)
 
 
 def test_retried_step_returns_the_committed_transition_once():
@@ -173,6 +198,40 @@ def test_closed_step_cache_is_globally_bounded_and_expires(monkeypatch):
         server._prune_closed_step_caches()
         assert not server._step_cache
         assert not server._closed_step_cache
+
+    asyncio.run(scenario())
+
+
+def test_model_visible_native_and_agent_eye_views_exclude_backend_sentinel(monkeypatch):
+    sentinel = "backend-only-sentinel-must-not-render"
+
+    class SentinelBackend(MockBackend):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.hidden_sentinel = sentinel
+            self._rng.seed(sentinel)
+
+    import qudgym.sessions as sessions_module
+    monkeypatch.setattr(sessions_module, "MockBackend", SentinelBackend)
+
+    async def scenario():
+        for index, representation in enumerate(("native", "agent-eye-v1")):
+            server = _server()
+            observation, _info = await server.reset(
+                {"representation": representation, "seed": 7, "max_decisions": 16},
+                f"privacy-{index}",
+            )
+            rendered = [observation]
+            for step, action in enumerate(("move:E", "move:E", "answer:open", "move:E", "move:E"), 1):
+                current = server._sessions.observe(server._state(f"privacy-{index}")["internal"])
+                result = await server.step(
+                    _action(action, current.decision_id),
+                    {"_ng_step_request_id": f"privacy-{index}-{step}"},
+                    f"privacy-{index}",
+                )
+                observation = result[0]
+                rendered.append(observation)
+            assert all(sentinel not in text for text in rendered)
 
     asyncio.run(scenario())
 

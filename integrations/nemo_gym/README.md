@@ -37,11 +37,17 @@ python scripts/stage_nemo_adapter.py /path/to/NeMo-Gym
 ```
 
 The helper is create-only and refuses a non-Git checkout, a commit other
-than the pinned SHA, or tracked local modifications. Its generated local
-`requirements.txt` installs both the pinned editable NeMo Gym checkout and
-this QudGym checkout into the resource server's isolated environment. Absolute
-`file://` paths exist only in that local generated file and are never committed.
-Set `NEMO_GYM_ALLOW_COMMIT_DRIFT=1` only for an explicitly reviewed API update.
+than the pinned SHA, or any tracked/untracked local changes outside the exact
+staging tree. The committed `source_manifest.json` verifies every executable
+adapter/config/data file before staging and again before a run; the generated
+resource-server virtual environment and interpreter caches are treated as
+runtime artifacts. Its generated local `requirements.txt` installs both the
+pinned editable NeMo Gym checkout and this QudGym checkout into the resource
+server's isolated environment. Absolute `file://` paths exist only in that
+local generated file and are never committed. Set
+`NEMO_GYM_ALLOW_COMMIT_DRIFT=1` only for an explicitly reviewed API update.
+After changing adapter source, regenerate and review the manifest with
+`python scripts/verify_nemo_adapter.py --write-source-manifest`.
 
 NeMo Gym's `--search-dir`/external-root mechanism is the eventual plugin
 packaging path once QudGym is published as a wheel or internal package. Until
@@ -54,6 +60,7 @@ The included config is self-contained:
 - Gymnasium agent instance: `qudgym_agent`;
 - model server instance: `policy_model`;
 - task budget: 16 decisions / at most 16 model calls;
+- resource-server workers: exactly 1 (session/replay state is process-local);
 - closed-session replay cache: 256 sessions / 300 seconds by default;
 - compatibility declaration: `allowed_agents: [gymnasium_agent]`;
 - verification state: `verified: false`.
@@ -112,33 +119,44 @@ separately.
 inference, calculate rewards, or create training examples.
 
 ```bash
+# Keep the key in the operator's secret/environment manager.
+export POLICY_ENDPOINT_KEY=...  # existing Studio/NeMo credential, not committed
 NEMO_GYM_ROOT=/path/to/NeMo-Gym \
 NEMO_GYM_MODEL=qudgym-policy \
 NEMO_GYM_MODEL_URL=http://127.0.0.1:8000/v1 \
-NEMO_GYM_MODEL_API_KEY=dummy \
+NEMO_GYM_MODEL_API_KEY_ENV=POLICY_ENDPOINT_KEY \
 NEMO_GYM_REPEATS=5 \
 NEMO_GYM_CONCURRENCY=1 \
 scripts/run_nemo_gym_mock.sh local/nemo-gym-qwen
 ```
 
+For an unauthenticated local fixture, `NEMO_GYM_MODEL_API_KEY=dummy` is also
+accepted. The wrapper resolves the key through an environment-backed NeMo Gym
+override; it does not place the raw value in the Gym command line or Hydra
+override file.
+
 The output directory is create-only. The wrapper:
 
-1. verifies the pinned NeMo Gym commit;
+1. verifies the pinned NeMo Gym commit and the committed adapter manifest;
 2. verifies the staged resource server and model `/models` endpoint;
 3. starts `gym env start` and uses NVIDIA's readiness script;
 4. runs `gym eval run --no-serve` with temperature 0, top-p 1, and a 256-token
    output limit;
 5. runs native `gym eval profile`;
-6. disables ambient W&B/MLflow rollout export with NeMo Gym's
-   `upload_rollouts=false` safety default;
-7. validates that every row is explicitly mock and routed through
+6. disables W&B/MLflow exporter setup and rollout export with explicit native
+   config overrides, including `upload_rollouts=false`;
+7. requires the configured repeat count, terminal mock success, four turns,
+   five decisions, and complete reward-profile joins by default;
+8. validates that every row is explicitly mock and routed through
    `qudgym_agent`;
-8. writes a compact `summary.json` that references native metrics and
+9. writes a compact `summary.json` that references native metrics and
    artifacts;
-9. gracefully interrupts the Gym process group.
+10. gracefully interrupts the Gym process group.
 
 Set `NEMO_GYM_ALLOW_COMMIT_DRIFT=1` only after reviewing an intentional NeMo Gym
-API update. Set `NEMO_GYM_USES_REASONING_PARSER=true` only when the external
+API update. Set `NEMO_GYM_REQUIRE_SUCCESS=0` only for a deliberately different
+mock task; the default success/profile assertions are part of this wrapper's
+contract. Set `NEMO_GYM_USES_REASONING_PARSER=true` only when the external
 vLLM server was launched with the matching reasoning parser. The optional
 `NEMO_GYM_MODEL_TYPE=openai_model` mode is only for an endpoint that genuinely
 implements the Responses API; it is not a Chat Completions substitute.
@@ -157,10 +175,13 @@ The output includes:
 - logs and the model `/models` response.
 
 Do not point two concurrent jobs at one capture directory. NeMo Gym rollout IDs
-do not include an evaluation-run ID. The wrapper explicitly sets
-`upload_rollouts=false` so an ambient `.env.yaml` cannot silently send mock
-observations or model responses to W&B/MLflow. If remote experiment export is
+do not include an evaluation-run ID. The wrapper rejects unexpected untracked
+NeMo checkout paths, verifies the staged adapter manifest, and explicitly
+nulls W&B/MLflow exporter availability fields in both Gym commands. It also
+sets `upload_rollouts=false`, so neither exporter configuration/metrics nor raw
+rollout rows are sent by this local workflow. If remote experiment export is
 wanted, review the payload and re-enable it as a separate operator action.
+The wrapper uses `umask 077` for raw model-call captures and local artifacts.
 Do not reinterpret native health checks as healthy when they are `unobserved`;
 inspect the named coverage gaps and keep that limitation attached to the run.
 
@@ -220,7 +241,8 @@ server and the intended external-server `vllm_model` bridge completed two
 native repeats. Each rollout returned reward `+1`, `outcome=success`,
 `is_mock=true`, four game turns, and five decisions; native trajectory
 attachments and reward-profile files were created. `gym eval export` rejected
-both rows because `ng_trajectory` contained coverage gaps.
+both rows because `ng_trajectory` contained coverage gaps. The full pinned
+NeMo environment suite also passes, including the real imported adapter tests.
 
 This validates plumbing and the mock success contract only. The native CI
 job repeats the staged lifecycle with the committed test-only model fixture. No

@@ -83,6 +83,8 @@ class CachedFault(TypedDict):
 
 
 class QudGymConfig(BaseResourcesServerConfig):
+    # Session and replay state are process-local; multiple uvicorn workers are unsafe.
+    num_workers: int = Field(default=1, ge=1, le=1, strict=True)
     closed_step_cache_max_sessions: int = Field(default=256, ge=1, le=10000, strict=True)
     closed_step_cache_ttl_seconds: float = Field(default=300.0, gt=0, le=86400, strict=True)
 

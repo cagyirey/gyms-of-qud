@@ -4,6 +4,7 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 NEMO_GYM_COMMIT = '1c8261080bdc881b3e9b7f870e6418f160516991'
@@ -30,12 +31,27 @@ def _validate_checkout(nemo_root: Path, *, allow_commit_drift: bool) -> None:
         raise ValueError(
             f'NeMo Gym commit mismatch: expected {NEMO_GYM_COMMIT}, found {actual}'
         )
-    if _git(nemo_root, 'status', '--porcelain', '--untracked-files=no'):
-        raise ValueError('NeMo Gym checkout has tracked local changes; review or set the explicit drift override')
+    if _git(nemo_root, 'status', '--porcelain', '--untracked-files=all'):
+        raise ValueError('NeMo Gym checkout has tracked or untracked local changes; review or set the explicit drift override')
+
+
+def _verify(project: Path, *args: str) -> None:
+    command = [
+        sys.executable,
+        str(project / 'scripts/verify_nemo_adapter.py'),
+        '--project-root',
+        str(project),
+        *args,
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode:
+        message = result.stderr.strip() or result.stdout.strip() or 'adapter verification failed'
+        raise ValueError(message)
 
 
 def stage(nemo_root: Path, project: Path, *, allow_commit_drift: bool = False) -> Path:
     nemo_root, project = nemo_root.resolve(strict=True), project.resolve(strict=True)
+    _verify(project)
     _validate_checkout(nemo_root, allow_commit_drift=allow_commit_drift)
     for required in (
         'pyproject.toml',
@@ -47,8 +63,13 @@ def stage(nemo_root: Path, project: Path, *, allow_commit_drift: bool = False) -
     destination = nemo_root / 'resources_servers/qudgym'
     if destination.exists():
         raise FileExistsError('resources_servers/qudgym already exists; refusing to overwrite')
-    shutil.copytree(project / 'integrations/nemo_gym/qudgym', destination,
-                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '.venv', '*.log'))
+    shutil.copytree(
+        project / 'integrations/nemo_gym/qudgym',
+        destination,
+        ignore=shutil.ignore_patterns(
+            'source_manifest.json', 'requirements.txt', '__pycache__', '*.pyc', '*.pyo', '.venv', '*.log'
+        ),
+    )
     # The isolated server venv needs both local projects. NeMo Gym is editable
     # because this adapter is reviewed against one pinned checkout; QudGym is
     # likewise local until an internal wheel/index exists.
@@ -57,6 +78,7 @@ def stage(nemo_root: Path, project: Path, *, allow_commit_drift: bool = False) -
         f'qudgym @ {project.as_uri()}\n'
     )
     (destination / 'requirements.txt').write_text(requirements, encoding='utf-8')
+    _verify(project, '--check-staged', '--nemo-root', str(nemo_root))
     return destination
 
 

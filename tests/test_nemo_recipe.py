@@ -82,6 +82,7 @@ def test_nemo_configs_use_the_builtin_gymnasium_agent_and_keep_mock_unverified()
         text = (INTEGRATION / "configs" / name).read_text(encoding="utf-8")
         assert "allowed_agents: [gymnasium_agent]" in text
         assert "max_steps: 16" in text
+        assert "num_workers: 1" in text
         assert "verified: false" in text
         assert "no live Qud yet" in text
         assert "/Users/" not in text
@@ -96,11 +97,39 @@ def test_native_wrapper_delegates_to_nemo_gym_without_a_second_policy_loop():
         "gymnasium_agent",
         "model_call_capture_dir",
         "upload_rollouts=false",
+        "wandb_project=null",
+        "wandb_name=null",
+        "wandb_api_key=null",
+        "mlflow_tracking_uri=null",
+        "mlflow_tracking_token=null",
+        "mlflow_experiment_name=null",
+        "mlflow_run_name=null",
+        "expected_rollout_count",
+        "reward_profile_completion_pct",
+        "NEMO_GYM_MODEL_API_KEY_ENV",
+        "NEMO_GYM_WRAPPER_POLICY_KEY",
+        "umask 077",
     ):
         assert required in text
+    assert "--model-api-key" not in text
     assert "qudgym.policy" not in text
     assert "QudEnv" not in text
     assert "gym eval export" not in text
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "NEMO_GYM_MODEL_TYPE=vllm_model" in workflow
+    assert "scripts/run_nemo_gym_mock.sh" in workflow
+    assert "GYM_PGID=$GYM_PID" in text
+    assert 'kill -0 -- "-$GYM_PGID"' in text
+
+
+def test_adapter_source_manifest_is_committed_and_contains_no_absolute_paths():
+    manifest = INTEGRATION / "source_manifest.json"
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    assert document["algorithm"] == "sha256"
+    assert document["files"]
+    assert "/Users/" not in manifest.read_text(encoding="utf-8")
+
+
 
 
 def test_source_requirements_do_not_embed_machine_paths():

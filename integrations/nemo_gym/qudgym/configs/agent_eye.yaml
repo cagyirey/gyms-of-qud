@@ -8,6 +8,7 @@ qudgym_resources_server:
       verified: false
       description: Mock QudGym decision-boundary environment; no live Qud yet
       value: Agent-eye mock decision-boundary smoke environment for native NeMo Gym
+      num_workers: 1
       closed_step_cache_max_sessions: 256
       closed_step_cache_ttl_seconds: 300.0
 qudgym_agent:
