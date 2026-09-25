@@ -1,0 +1,11 @@
+{
+  "schema_version": "qudgym-compat/1",
+  "game_build": "REPLACE_WITH_EXACT_BUILD",
+  "profile": "dedicated-test",
+  "enabled_mods": [],
+  "hooks": [],
+  "notes": [
+    "Replace this placeholder with reviewed local evidence.",
+    "Do not include absolute paths, credentials, saves, or raw logs."
+  ]
+}

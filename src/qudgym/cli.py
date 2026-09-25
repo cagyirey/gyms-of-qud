@@ -20,10 +20,22 @@ def main():
     serve.add_argument("--oracle", action="store_true", help="Enable privileged search APIs")
     schema = commands.add_parser("schema", help="Export JSON schemas")
     schema.add_argument("--output", type=Path, default=Path("schemas"))
+    compat = commands.add_parser("compat-validate", help="Validate a redacted compatibility document")
+    compat.add_argument("path", type=Path)
+    compat.add_argument("--kind", choices=("auto", "manifest", "diagnostic"), default="auto")
     from .eye.cli import add_commands
     add_commands(commands)
     args = parser.parse_args()
-    if args.command.startswith("eye-"):
+    if args.command == "compat-validate":
+        from pydantic import ValidationError
+
+        from .compat import document_summary, parse_document
+        try:
+            document = parse_document(args.path.read_bytes(), kind=args.kind)
+        except (OSError, ValueError, ValidationError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(document_summary(document), sort_keys=True))
+    elif args.command.startswith("eye-"):
         from .eye.cli import run
         try:
             run(args)
@@ -53,6 +65,7 @@ def main():
         if len(token) < 32:
             parser.error("Set QUDGYM_TOKEN to a random token of at least 32 characters")
         import uvicorn
+
         from .rpc import RpcService
         from .server import create_app
         backend = MockBackend(allow_oracle=args.oracle)
@@ -61,8 +74,10 @@ def main():
         finally:
             backend.close()
     else:
+        from .compat import DiagnosticReport, InstallManifest
         args.output.mkdir(parents=True, exist_ok=True)
-        for model in (RpcRequest, RpcResponse, Observation, Transition, Capabilities):
+        for model in (RpcRequest, RpcResponse, Observation, Transition, Capabilities,
+                      InstallManifest, DiagnosticReport):
             (args.output / f"{model.__name__}.schema.json").write_text(
                 json.dumps(model.model_json_schema(), indent=2) + "\n", encoding="utf-8")
 
