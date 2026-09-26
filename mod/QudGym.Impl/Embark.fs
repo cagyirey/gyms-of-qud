@@ -91,14 +91,33 @@ module Embark =
         let manager = staticValue "Instance" (ty "GameManager")
         match instanceValue "uiSynchronizationContext" manager with
         | :? SynchronizationContext as context ->
-            let finished = TaskCompletionSource<'a>()
-            context.Post(
-                SendOrPostCallback(fun _ ->
-                    try finished.TrySetResult(work ()) |> ignore
-                    with ex -> finished.TrySetException(ex) |> ignore),
-                null)
-            if not (finished.Task.Wait(20000)) then failwith "ui hop timed out"
-            finished.Task.GetAwaiter().GetResult()
+            // The Unity main thread may still be streaming blueprints when this
+            // first fires, in which case the posted work is simply not pumped
+            // yet. Wait in bounded attempts rather than failing the episode on
+            // the first miss, and never hold the core thread indefinitely.
+            let mutable attempt = 0
+            let mutable failure : exn option = None
+            let mutable value : 'a option = None
+            while attempt < 3 && failure.IsNone && value.IsNone do
+                attempt <- attempt + 1
+                let finished = TaskCompletionSource<'a>()
+                try
+                    context.Post(
+                        SendOrPostCallback(fun _ ->
+                            try finished.TrySetResult(work ()) |> ignore
+                            with ex -> finished.TrySetException(ex) |> ignore),
+                        null)
+                    if finished.Task.Wait(20000) then
+                        try value <- Some(finished.Task.GetAwaiter().GetResult())
+                        with ex -> failure <- Some ex
+                    // The caller records the eventual failure with the episode
+                    // path; Embark has no log path of its own here.
+                with ex ->
+                    failure <- Some ex
+            match failure, value with
+            | Some ex, _ -> raise ex
+            | _, Some v -> v
+            | _ -> failwith "ui hop timed out"
         | _ -> failwith "ui synchronization context missing"
 
     let private loadoutJson () =
@@ -231,4 +250,7 @@ module Embark =
                 invoke "RunGame" [||] core |> ignore
             with ex ->
                 suppressPopups <- false
+                // Release the one-shot latch. A transient UI miss must not
+                // disable programmatic embark for the rest of the process.
+                lock gate (fun () -> started <- false)
                 Probe.record path ("embark failed " + describe ex) |> ignore

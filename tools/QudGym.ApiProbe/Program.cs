@@ -141,6 +141,17 @@ internal static class Queries
         ["XRL.World.Parts.ActivatedAbilities"] = ["List", "Get", "Ability"],
         ["XRL.UI.MessageQueue"] = ["Message", "Get"],
         ["ConsoleLib.Console.Keyboard"] = ["get", "Key", "Input", "Push"],
+        // Types a play-capable read-only projection needs. XRL.UI.MessageQueue
+        // does not exist on this build; the message log is XRL.Messages.
+        ["XRL.Messages"] = ["Message", "Get", "Log", "Add", "Clear"],
+        ["Qud.UI.MessageLogLineData"] = [],
+        ["Qud.UI.MessageLogWindow"] = [],
+        ["ConsoleLib.Console.ScreenBuffer"] = [],
+        ["XRL.UI.Popup"] = ["Show", "Text", "Options", "Menu"],
+        ["XRL.World.Zone"] = ["Width", "Height", "GetCell", "Visible", "Explored", "ID", "Name"],
+        ["XRL.World.GameObject"] = ["DisplayName", "IsPlayer", "CurrentCell", "GetRenderString",
+            "Visible", "IsVisibleTo", "Blueprint", "GetBlueprint"],
+        ["XRL.The"] = ["Player", "Game"],
     };
 }
 

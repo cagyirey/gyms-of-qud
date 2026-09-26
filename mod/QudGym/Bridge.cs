@@ -182,6 +182,15 @@ static class QudGymBridge
         }
     }
 
+    // Invoked from the game's after-game-loaded callback, on the core thread
+    // with the UI context live. This is the only safe point to boot a build
+    // sheet programmatically.
+    public static void AfterGameLoaded()
+    {
+        Write("after game loaded");
+        Embark();
+    }
+
     public static void Mutate(XRL.World.GameObject player)
     {
         Write("mutate player=" + (player == null ? "null" : "present"));

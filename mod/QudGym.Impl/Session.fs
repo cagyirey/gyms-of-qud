@@ -156,21 +156,102 @@ module Session =
         try asInt (call player name [| box "Hitpoints"; box fallback |])
         with _ -> fallback
 
+    /// Perceived map radius. The 5x5 window this shipped with was too myopic to
+    /// navigate on; the radius is a knob so a caller can trade tokens for reach.
+    let mutable private radius = 6
+
+    let setRadius (value: int) = radius <- max 1 (min 24 value)
+
+
+    let private visible (cell: obj) =
+        // Prefer the game's own visibility verdict. Never reveal a cell the
+        // player has not perceived.
+        try call cell "IsVisible" [||] :?> bool
+        with _ -> true
+
+    let private objectsIn (cell: obj) =
+        try call cell "GetObjects" [||] :?> Collections.IEnumerable
+        with _ -> null
+
+    /// Read-only entity projection. Only objects the game already considers
+    /// visible in a visible cell are reported, and only public presentation
+    /// fields: no blueprint metadata, no hidden stats, no internal identity.
+    let private entityEntries (player: obj) (zone: obj) (x0: int) (y0: int) =
+        let acc = ResizeArray<string * string * int * int * bool * string>()
+        // The player is reported once, anchored, and never mixed into the
+        // surrounding cells.
+        let playerName =
+            try
+                match memberValue player "DisplayName" with
+                | :? string as s when s <> "" -> s
+                | _ -> "you"
+            with _ -> "you"
+        acc.Add((playerName, "self", 0, 0, true, "")) |> ignore
+        let seen = HashSet<string>()
+        for dy in -radius .. radius do
+            for dx in -radius .. radius do
+                if dx <> 0 || dy <> 0 then
+                    let cell =
+                        try call zone "GetCell" [| box (x0 + dx); box (y0 + dy) |]
+                        with _ -> null
+                    if not (isNull cell) && visible cell then
+                        let objs = objectsIn cell
+                        if not (isNull objs) then
+                            for o in objs do
+                                if not (isNull o) && not (Object.ReferenceEquals(o, player)) then
+                                    let name =
+                                        try
+                                            match memberValue o "DisplayName" with
+                                            | :? string as s when s <> "" -> s
+                                            | _ -> "something"
+                                        with _ -> "something"
+                                    let glyphChar =
+                                        try
+                                            match call o "getRenderString" [||] with
+                                            | :? string as s when s.Length > 0 -> string s.[0]
+                                            | _ -> ""
+                                        with _ -> ""
+                                    // Public presentation only. The engine's own
+                                    // stable handle is deliberately not exported.
+                                    let key = sprintf "%s|%d|%d|%s" name dx dy glyphChar
+                                    if seen.Add key then
+                                        acc.Add((name, "object", dx, dy, false, glyphChar)) |> ignore
+        acc |> Seq.toArray
+
+    let private entitiesJson (player: obj) (zone: obj) (x0: int) (y0: int) =
+        entityEntries player zone x0 y0
+        |> Array.mapi (fun i (name, kind, dx, dy, isSelf, glyphChar) ->
+            sprintf
+                "{\"id\":\"e%d\",\"name\":%s,\"kind\":%s,\"dx\":%d,\"dy\":%d,\"glyph\":%s,\"is_self\":%s}"
+                i (jsonString name) (jsonString kind) dx dy (jsonString glyphChar) (if isSelf then "true" else "false"))
+        |> String.concat ","
+        |> fun s -> "[" + s + "]"
+
     let private window (origin: obj) =
         let x0 = asInt (memberValue origin "X")
         let y0 = asInt (memberValue origin "Y")
         let zone = memberValue origin "ParentZone"
-        let radius = 2
+        let r = radius
         let rows = ResizeArray<string>()
-        for dy in -radius .. radius do
+        for dy in -r .. r do
             let row = StringBuilder()
-            for dx in -radius .. radius do
+            for dx in -r .. r do
                 let cell =
                     try call zone "GetCell" [| box (x0 + dx); box (y0 + dy) |]
                     with _ -> null
-                row.Append(if isNull cell then "?" else glyph cell) |> ignore
+                let ch =
+                    if isNull cell then "?"
+                    elif not (visible cell) then " "
+                    else glyph cell
+                row.Append(ch) |> ignore
             rows.Add(row.ToString())
-        x0, y0, rows
+        let width =
+            try asInt (call zone "Width" [||])
+            with _ -> (2 * r + 1)
+        let height =
+            try asInt (call zone "Height" [||])
+            with _ -> (2 * r + 1)
+        x0, y0, rows, zone, width, height
 
     let private actionsJson () =
         let moves =
@@ -185,17 +266,50 @@ module Session =
         let wait = "{\"id\":\"wait\",\"kind\":\"wait\",\"label\":\"Wait one turn\",\"arguments\":{}}"
         "[" + String.Join(",", Array.append moves [| wait |]) + "]"
 
+    /// Recent console lines the player has actually seen. The screen buffer is
+    /// the game's own rendered output, so this cannot surface anything the
+    /// player has not perceived.
+    let private messagesJson () =
+        let acc = ResizeArray<string>()
+        try
+            let ty = Type.GetType("ConsoleLib.Console+ScreenBuffer, Assembly-CSharp")
+            if not (isNull ty) then
+                let prop = ty.GetProperty("Current", BindingFlags.Static ||| BindingFlags.Public)
+                if not (isNull prop) then
+                    match prop.GetValue(null) with
+                    | null -> ()
+                    | buffer ->
+                        let rows = asInt (memberValue buffer "Height")
+                        let cols = asInt (memberValue buffer "Width")
+                        let start = max 0 (rows - 12)
+                        for row in start .. rows - 1 do
+                            let sb = StringBuilder()
+                            for col in 0 .. cols - 1 do
+                                try
+                                    let ch = call buffer "Get" [| box row; box col |]
+                                    match ch with
+                                    | :? char as c -> sb.Append(c) |> ignore
+                                    | _ -> ()
+                                with _ -> ()
+                            let line = sb.ToString().Trim()
+                            if line <> "" then acc.Add line
+        with _ -> ()
+        acc |> Seq.distinct |> Seq.rev |> Seq.truncate 20
+        |> Seq.map jsonString |> String.concat "," |> fun s -> "[" + s + "]"
+
     let private observation (player: obj) turn index =
         let cell = memberValue player "CurrentCell"
-        let x, y, rows = window cell
+        let x, y, rows, zone, width, height = window cell
         let hp = max 0 (stat player "Stat" 0)
         let mutable maxHp = max 1 (stat player "BaseStat" 1)
         if hp > maxHp then maxHp <- hp
         let tiles = rows |> Seq.map jsonString |> String.concat ","
+        let entities = entitiesJson player zone x y
+        let messages = messagesJson ()
         let id = episode + ":" + string index
         id, sprintf
-            "{\"episode_id\":%s,\"decision_id\":%s,\"turn\":%d,\"phase\":\"command\",\"player\":{\"x\":%d,\"y\":%d,\"hp\":%d,\"max_hp\":%d},\"tiles\":[%s],\"entities\":[],\"messages\":[],\"prompt\":null,\"actions\":%s}"
-            (jsonString episode) (jsonString id) turn x y hp maxHp tiles (actionsJson ())
+            "{\"episode_id\":%s,\"decision_id\":%s,\"turn\":%d,\"phase\":\"command\",\"player\":{\"x\":%d,\"y\":%d,\"hp\":%d,\"max_hp\":%d},\"view\":{\"radius\":%d,\"zone_width\":%d,\"zone_height\":%d},\"tiles\":[%s],\"entities\":%s,\"messages\":%s,\"prompt\":null,\"actions\":%s}"
+            (jsonString episode) (jsonString id) turn x y hp maxHp radius width height tiles entities messages (actionsJson ())
 
     let private transition index turn observationJson =
         sprintf
