@@ -36,7 +36,7 @@ static class QudGymEmbarkHook
     {
         if (s != "Starting Game...")
             return;
-        QudGymBridge.Embark();
+        QudGymBridge.Boot();
     }
 }
 

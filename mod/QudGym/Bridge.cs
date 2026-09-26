@@ -10,6 +10,8 @@ static class QudGymBridge
     static MethodInfo record;
     static MethodInfo noteActor;
     static MethodInfo embark;
+    static MethodInfo prepareEarly;
+    static MethodInfo boot;
     static MethodInfo allowPopup;
     static MethodInfo listen;
     static MethodInfo supply;
@@ -29,6 +31,8 @@ static class QudGymBridge
             noteActor = probe.GetMethod("noteActor");
             Type embarkType = impl.GetType("QudGym.Embark");
             embark = embarkType.GetMethod("start");
+            prepareEarly = embarkType.GetMethod("prepareEarly");
+            boot = embarkType.GetMethod("boot");
             allowPopup = embarkType.GetMethod("allowPopup");
             Type session = impl.GetType("QudGym.Session");
             listen = session.GetMethod("listen");
@@ -189,6 +193,45 @@ static class QudGymBridge
     {
         Write("after game loaded");
         Embark();
+    }
+
+    // Runs on the core thread at menu-up. The UI context is pumping here, so
+    // the EmbarkBuilder AddComponent hop completes. Doing it later, from inside
+    // the game's own boot, deadlocks against the main thread.
+    public static void PrepareEarly()
+    {
+        Ensure();
+        if (prepareEarly == null)
+            return;
+        try
+        {
+            string path = Path.Combine(Application.persistentDataPath, "QudGym-diagnostic.txt");
+            prepareEarly.Invoke(null, new object[] { path });
+        }
+        catch (Exception ex)
+        {
+            Write("prepare early failed " + ex.GetBaseException().GetType().Name);
+        }
+    }
+
+    // Runs at "Starting Game...". Uses the prepared builder; no UI hop here.
+    public static void Boot()
+    {
+        Ensure();
+        if (boot == null)
+        {
+            Write("boot missing");
+            return;
+        }
+        try
+        {
+            string path = Path.Combine(Application.persistentDataPath, "QudGym-diagnostic.txt");
+            boot.Invoke(null, new object[] { path });
+        }
+        catch (Exception ex)
+        {
+            Write("boot invoke failed " + ex.GetBaseException().GetType().Name);
+        }
     }
 
     public static void Mutate(XRL.World.GameObject player)

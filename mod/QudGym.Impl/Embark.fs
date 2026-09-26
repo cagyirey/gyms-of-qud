@@ -13,6 +13,9 @@ module Embark =
     let private gate = obj ()
     let mutable private started = false
     let mutable private suppressPopups = false
+    // Prepared during the early phase, while the UI context is live and the
+    // core thread is not yet inside the game's boot.
+    let mutable private prepared : (obj * obj) option = None
 
     let allowPopup () = not suppressPopups
 
@@ -213,25 +216,44 @@ module Embark =
             | data -> addData.Invoke(dataList, [| data |]) |> ignore
         info, names
 
-    let start (path: string) =
+    /// Runs on the core thread while the menu is up and the UI context is
+    /// pumping. This is the only point where the AddComponent hop can complete:
+    /// once the core thread is inside the game's own boot the main thread stops
+    /// servicing the context and the hop deadlocks.
+    let prepareEarly (path: string) =
+        lock gate (fun () ->
+            if started || prepared.IsSome then ()
+            else
+                match staticValue "IsCoreThread" (ty "XRL.Core.XRLCore") with
+                | :? bool as onCore when onCore ->
+                    started <- true
+                    try
+                        Probe.record path "embark prepare" |> ignore
+                        let json = loadoutJson ()
+                        let code =
+                            invokeStatic "Compress" [| box json |] (ty "XRL.CharacterBuilds.CodeCompressor")
+                            :?> string
+                        let game, builder = prepare code
+                        prepared <- Some(game, builder)
+                        Probe.record path "embark prepared" |> ignore
+                    with ex ->
+                        prepared <- None
+                        lock gate (fun () -> started <- false)
+                        Probe.record path ("embark prepare failed " + describe ex) |> ignore
+                | _ -> ())
+
+    /// Runs on the core thread at "Starting Game...". Uses the already-prepared
+    /// builder, so no UI hop happens on this path at all.
+    let boot (path: string) =
         let proceed =
             lock gate (fun () ->
-                if started then false
-                else
-                    match staticValue "IsCoreThread" (ty "XRL.Core.XRLCore") with
-                    | :? bool as onCore when onCore ->
-                        started <- true
-                        true
-                    | _ -> false)
+                if started && prepared.IsSome then true
+                else false)
         if not proceed then ()
         else
             try
                 Probe.record path "embark start" |> ignore
-                let json = loadoutJson ()
-                let code =
-                    invokeStatic "Compress" [| box json |] (ty "XRL.CharacterBuilds.CodeCompressor")
-                    :?> string
-                let game, builder = prepare code
+                let game, builder = prepared.Value
                 let info, names = copyIntoInfo builder
                 Probe.record path ("embark modules " + String.Join(",", names)) |> ignore
                 suppressPopups <- true
@@ -254,3 +276,8 @@ module Embark =
                 // disable programmatic embark for the rest of the process.
                 lock gate (fun () -> started <- false)
                 Probe.record path ("embark failed " + describe ex) |> ignore
+
+    /// Backwards-compatible entry point: prepare if needed, then boot.
+    let start (path: string) =
+        prepareEarly path
+        boot path

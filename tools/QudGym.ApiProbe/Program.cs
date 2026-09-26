@@ -132,6 +132,8 @@ internal static class Queries
         ["XRL.World.BeforeRenderEvent"] = [],
         ["XRL.World.BeginTakeActionEvent"] = [],
         ["XRL.The"] = ["Player", "Game"],
+        ["XRL.Core.XRLCore"] = ["Update", "LateUpdate", "Main", "RunGame", "Tick",
+            "Idle", "Wait", "Step", "WriteConsoleLine", "NewGame", "IsCoreThread"],
         ["XRL.World.GameObject"] = ["CurrentCell", "DisplayName", "Stat", "Visible", "Render",
             "Inventory", "Body", "ActivatedAbilit", "GetPart", "HasPart", "AddPart"],
         ["XRL.World.Cell"] = ["Visible", "Explored", "Objects", "ParentZone", "get_X", "get_Y"],
@@ -152,6 +154,8 @@ internal static class Queries
         ["XRL.World.GameObject"] = ["DisplayName", "IsPlayer", "CurrentCell", "GetRenderString",
             "Visible", "IsVisibleTo", "Blueprint", "GetBlueprint"],
         ["XRL.The"] = ["Player", "Game"],
+        ["XRL.Core.XRLCore"] = ["Update", "LateUpdate", "Main", "RunGame", "Tick",
+            "Idle", "Wait", "Step", "WriteConsoleLine", "NewGame", "IsCoreThread"],
     };
 }
 
