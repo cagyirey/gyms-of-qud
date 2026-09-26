@@ -220,6 +220,29 @@ module Embark =
     /// pumping. This is the only point where the AddComponent hop can complete:
     /// once the core thread is inside the game's own boot the main thread stops
     /// servicing the context and the hop deadlocks.
+    /// Reads, live, the two XRLCore flags that look like they gate the mod
+    /// new-game flow, plus whether the UI context we hop to is present at all.
+    /// Metadata cannot say who sets them, so this observes them instead.
+    let describeFlags () =
+        let read name =
+            try
+                let t = ty "XRL.Core.XRLCore"
+                let f = t.GetField(name, BindingFlags.Instance ||| BindingFlags.Static ||| BindingFlags.Public ||| BindingFlags.NonPublic)
+                if isNull f then "missing"
+                else
+                    match f.GetValue(staticValue "Core" t) with
+                    | null -> "null"
+                    | v -> string v
+            with ex -> "err:" + ex.GetType().Name
+        let ctxState =
+            try
+                let manager = staticValue "Instance" (ty "GameManager")
+                let c = instanceValue "uiSynchronizationContext" manager
+                if isNull c then "null" else c.GetType().Name
+            with ex -> "err:" + ex.GetType().Name
+        sprintf "_isNewGameModFlow=%s waitForSegmentOnGameThread=%s uiCtx=%s"
+            (read "_isNewGameModFlow") (read "waitForSegmentOnGameThread") ctxState
+
     let prepareEarly (path: string) =
         lock gate (fun () ->
             if started || prepared.IsSome then ()
@@ -228,7 +251,7 @@ module Embark =
                 | :? bool as onCore when onCore ->
                     started <- true
                     try
-                        Probe.record path "embark prepare" |> ignore
+                        Probe.record path ("embark prepare " + describeFlags ()) |> ignore
                         let json = loadoutJson ()
                         let code =
                             invokeStatic "Compress" [| box json |] (ty "XRL.CharacterBuilds.CodeCompressor")
@@ -252,7 +275,7 @@ module Embark =
         if not proceed then ()
         else
             try
-                Probe.record path "embark start" |> ignore
+                Probe.record path ("embark start " + describeFlags ()) |> ignore
                 let game, builder = prepared.Value
                 let info, names = copyIntoInfo builder
                 Probe.record path ("embark modules " + String.Join(",", names)) |> ignore
