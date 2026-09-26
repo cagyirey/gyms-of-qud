@@ -119,11 +119,28 @@ static class QudGymBridge
             if (game != null && game.Turns > 0 && game.Turns < int.MaxValue)
                 turn = (int)game.Turns;
             object command = supply.Invoke(null, new object[] { player, turn });
-            string text = command as string;
-            if (string.IsNullOrEmpty(text))
+            if (command == null)
                 return false;
-            ConsoleLib.Console.Keyboard.PushCommand(text);
-            return true;
+            // The F# side resolves an action id to one of the game's own Cmd*
+            // verbs plus its argument, so movement, interaction and pickup go
+            // through exactly the path a keypress takes. A bare string is still
+            // accepted for verbs that take no argument.
+            string name = command as string;
+            if (name != null)
+            {
+                if (name.Length == 0)
+                    return false;
+                ConsoleLib.Console.Keyboard.PushCommand(name, null);
+                return true;
+            }
+            if (command is ValueTuple<string, object> pair)
+            {
+                if (string.IsNullOrEmpty(pair.Item1))
+                    return false;
+                ConsoleLib.Console.Keyboard.PushCommand(pair.Item1, pair.Item2);
+                return true;
+            }
+            return false;
         }
         catch (Exception ex)
         {

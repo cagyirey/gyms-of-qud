@@ -133,9 +133,10 @@ internal static class Queries
         ["XRL.World.BeginTakeActionEvent"] = [],
         ["XRL.The"] = ["Player", "Game"],
         ["XRL.Core.XRLCore"] = [],
-                ["ConsoleLib.Console"] = ["Screen", "Current", "Buffer"],
-        ["ConsoleLib.Console.ConsoleChar"] = [],
-        ["ConsoleLib.Console+TextConsole"] = ["Get", "Row", "Buffer", "Scroll", "Lines"],
+        ["XRL.World.AI.Pathfinding"] = [],
+        ["XRL.World.Parts.Interactable"] = [],
+        ["XRL.World.GameObject"] = ["Move", "Path", "Interact", "Handle", "Want", "Quick", "Adjacent", "CanMove"],
+                ["ConsoleLib.Console+TextConsole"] = ["Get", "Row", "Buffer", "Scroll", "Lines"],
         ["XRL.World.GameObject"] = ["CurrentCell", "DisplayName", "Stat", "Visible", "Render",
             "Inventory", "Body", "ActivatedAbilit", "GetPart", "HasPart", "AddPart"],
         ["XRL.World.Cell"] = ["Visible", "Explored", "Objects", "ParentZone", "get_X", "get_Y"],
@@ -144,7 +145,7 @@ internal static class Queries
         ["XRL.World.Anatomy.BodyPart"] = ["Type", "Name", "Equipped", "Child", "Part"],
         ["XRL.World.Parts.ActivatedAbilities"] = ["List", "Get", "Ability"],
         ["XRL.UI.MessageQueue"] = ["Message", "Get"],
-        ["ConsoleLib.Console.Keyboard"] = ["get", "Key", "Input", "Push"],
+        ["ConsoleLib.Console.Keyboard"] = [],
         // Types a play-capable read-only projection needs. XRL.UI.MessageQueue
         // does not exist on this build; the message log is XRL.Messages.
         ["XRL.Messages"] = ["Message", "Get", "Log", "Add", "Clear"],

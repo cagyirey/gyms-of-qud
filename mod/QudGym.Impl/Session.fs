@@ -83,17 +83,6 @@ module Session =
            "SE", 1, 1
            "SW", -1, 1 |]
 
-    let private commandOf action =
-        if action = "wait" then Some "CmdWait"
-        else
-            let prefix = "move:"
-            if action.StartsWith(prefix) then
-                let facing = action.Substring(prefix.Length)
-                if directions |> Array.exists (fun (name, _, _) -> name = facing) then
-                    Some ("CmdMove" + facing)
-                else None
-            else None
-
     let private jsonString (value: string) =
         let buf = StringBuilder(value.Length + 2)
         buf.Append('"') |> ignore
@@ -281,18 +270,63 @@ module Session =
             with _ -> (2 * r + 1)
         x0, y0, rows, zone, width, height
 
-    let private actionsJson () =
-        let moves =
-            directions
-            |> Array.map (fun (name, dx, dy) ->
-                sprintf
-                    "{\"id\":%s,\"kind\":\"move\",\"label\":%s,\"arguments\":{\"dx\":%d,\"dy\":%d}}"
-                    (jsonString ("move:" + name))
-                    (jsonString ("Move " + name))
-                    dx
-                    dy)
-        let wait = "{\"id\":\"wait\",\"kind\":\"wait\",\"label\":\"Wait one turn\",\"arguments\":{}}"
-        "[" + String.Join(",", Array.append moves [| wait |]) + "]"
+    /// Offer intent-level actions, not just raw steps.
+    ///
+    /// The verbs are the game's own, so they are only listed when they can
+    /// actually resolve right now: talk/use/get are offered per visible
+    /// interactable, and goto is offered for cells inside the perceived window.
+    /// An action that cannot resolve is rejected rather than silently doing
+    /// nothing, so the list is a truthful description of what is available.
+    let private zoneForPlayer (player: obj) =
+        let cell = memberValue player "CurrentCell"
+        memberValue cell "ParentZone"
+
+    let private actionsJson (player: obj) =
+        let cell = memberValue player "CurrentCell"
+        let x0 = asInt (memberValue cell "X")
+        let y0 = asInt (memberValue cell "Y")
+        let parts = ResizeArray<string>()
+
+        for (name, dx, dy) in directions do
+            parts.Add(sprintf
+                "{\"id\":%s,\"kind\":\"move\",\"label\":%s,\"arguments\":{\"dx\":%d,\"dy\":%d}}"
+                (jsonString ("move:" + name)) (jsonString ("Move " + name)) dx dy)
+
+        for (name, _, _) in directions do
+            parts.Add(sprintf
+                "{\"id\":%s,\"kind\":\"move_far\",\"label\":%s,\"arguments\":{}}"
+                (jsonString ("far:" + name)) (jsonString ("Move far " + name)))
+
+        // Interaction, one entry per distinct visible interactable name.
+        let seenNames = HashSet<string>()
+        let zone = zoneForPlayer player
+        let entries = entityEntries player zone x0 y0
+        for e in entries do
+            let (name, kind, _, _, _, _) = e
+            if kind = "object" && name <> "" && name <> "something" && seenNames.Add name then
+                for verb in [| "talk"; "use"; "get" |] do
+                    parts.Add(sprintf
+                        "{\"id\":%s,\"kind\":%s,\"label\":%s,\"arguments\":{\"target\":%s}}"
+                        (jsonString (verb + ":" + name))
+                        (jsonString verb)
+                        (jsonString (verb + " " + name))
+                        (jsonString name))
+
+        let consoleVerbs =
+            [| ("look", "Look"); ("quests", "Quests"); ("journal", "Journal")
+               ("history", "Message history"); ("wait", "Wait one turn") |]
+        for (cid, label) in consoleVerbs do
+            parts.Add(sprintf
+                "{\"id\":%s,\"kind\":\"console\",\"label\":%s,\"arguments\":{}}"
+                (jsonString cid) (jsonString label))
+
+        "[" + String.concat "," (parts |> Seq.toArray) + "]"
+
+    /// Never allowed to throw: this runs on the turn thread inside publish,
+    /// and a malformed action list would break the decision boundary itself.
+    let private actionsJsonSafe (player: obj) =
+        try actionsJson player with _ -> "[{\"id\":\"wait\",\"kind\":\"wait\",\"label\":\"Wait one turn\",\"arguments\":{}}]"
+
 
     /// Text the player has actually seen.
     ///
@@ -354,7 +388,7 @@ module Session =
         let id = episode + ":" + string index
         id, sprintf
             "{\"episode_id\":%s,\"decision_id\":%s,\"turn\":%d,\"phase\":\"command\",\"player\":{\"x\":%d,\"y\":%d,\"hp\":%d,\"max_hp\":%d},\"view\":{\"radius\":%d,\"zone_width\":%d,\"zone_height\":%d},\"tiles\":[%s],\"entities\":%s,\"messages\":%s,\"prompt\":null,\"actions\":%s}"
-            (jsonString episode) (jsonString id) turn x y hp maxHp radius width height tiles entities messages (actionsJson ())
+            (jsonString episode) (jsonString id) turn x y hp maxHp radius width height tiles entities messages (actionsJsonSafe player)
 
     let private transition index turn observationJson =
         sprintf
@@ -456,11 +490,105 @@ module Session =
     // every live run in ThreadAbortException.
     //
     // Returns "" when cancelled so the caller lets the original IdleWait run.
+    /// Resolve an action id to one of the game's own input verbs, plus the
+    /// argument PushCommand expects.
+    ///
+    /// These are the engine's Cmd* verbs rather than anything invented here, so
+    /// movement, interaction and pickup go through the same code path a player's
+    /// keypress does. That keeps prompts, refusals and failed moves behaving the
+    /// way the game intends instead of being reimplemented on top of it.
+    let private findEntityNamed (player: obj) (name: string) =
+        let cell = memberValue player "CurrentCell"
+        let zone = memberValue cell "ParentZone"
+        let x0 = asInt (memberValue cell "X")
+        let y0 = asInt (memberValue cell "Y")
+        let mutable found = null
+        let mutable ring = 0
+        while isNull found && ring <= radius do
+            for dy in -ring .. ring do
+                for dx in -ring .. ring do
+                    if isNull found && (System.Math.Abs(dx) = ring || System.Math.Abs(dy) = ring) then
+                        let c =
+                            try call zone "GetCell" [| box (x0 + dx); box (y0 + dy) |]
+                            with _ -> null
+                        if not (isNull c) && visible c then
+                            let objs = objectsIn c
+                            if not (isNull objs) then
+                                for o in objs do
+                                    if isNull found && not (isNull o) then
+                                        let n =
+                                            try
+                                                match memberValue o "DisplayName" with
+                                                | :? string as s -> s
+                                                | _ -> ""
+                                            with _ -> ""
+                                        if n.Equals(name, StringComparison.OrdinalIgnoreCase) then found <- o
+            ring <- ring + 1
+        found
+
+    let private cellAt (player: obj) (x: int) (y: int) =
+        let cell = memberValue player "CurrentCell"
+        let zone = memberValue cell "ParentZone"
+        try call zone "GetCell" [| box x; box y |] with _ -> null
+
+    /// The live player, for validating an action from the transport thread.
+    ///
+    /// Same static read the observation path already performs. It is a plain
+    /// reference read, not a state mutation, and it is the only way to reject a
+    /// malformed action before it is staged.
+    let private livePlayer () =
+        try
+            let asm =
+                AppDomain.CurrentDomain.GetAssemblies()
+                |> Array.find (fun a -> a.GetName().Name = "Assembly-CSharp")
+            let t = asm.GetType("XRL.The", false)
+            if isNull t then null
+            else
+                let p = t.GetProperty("Player", BindingFlags.Static ||| BindingFlags.Public)
+                if isNull p then null else p.GetValue(null, null)
+        with _ -> null
+
+    let private commandOf (action: string) (player: obj) =
+        if action = "wait" then Some("CmdWait", box null)
+        elif action = "look" then Some("CmdLook", box null)
+        elif action = "quests" then Some("CmdQuests", box null)
+        elif action = "journal" then Some("CmdJournal", box null)
+        elif action = "history" then Some("CmdMessageHistory", box null)
+        elif action.StartsWith("far:") then
+            let d = action.Substring(4)
+            if directions |> Array.exists (fun (name, _, _) -> name = d) then
+                Some("CmdMoveFar" + d, box null)
+            else None
+        elif action.StartsWith("goto:") then
+            let parts = action.Substring(5).Split([| ','; ' ' |], StringSplitOptions.RemoveEmptyEntries)
+            match parts with
+            | [| a; b |] ->
+                try
+                    let target = cellAt player (Int32.Parse a) (Int32.Parse b)
+                    if isNull target then None else Some("CmdMoveTo", box target)
+                with _ -> None
+            | _ -> None
+        elif action.StartsWith("talk:") || action.StartsWith("use:") || action.StartsWith("get:") then
+            let verb, rest =
+                if action.StartsWith("talk:") then "CmdTalk", action.Substring(5)
+                elif action.StartsWith("use:") then "CmdUse", action.Substring(4)
+                else "CmdGet", action.Substring(4)
+            let target = findEntityNamed player rest
+            if isNull target then None else Some(verb, box target)
+        else
+            let prefix = "move:"
+            if action.StartsWith(prefix) then
+                let facing = action.Substring(prefix.Length)
+                if directions |> Array.exists (fun (name, _, _) -> name = facing) then
+                    Some("CmdMove" + facing, box null)
+                else None
+            else None
+
     let supply (player: obj) (turn: int) =
         let mutable announced = -1
-        let mutable result = ""
+        let mutable result : (string * obj) option = None
         let mutable running = true
-        while running && result = "" do
+        while running && result.IsNone do
             let staged =
                 lock gate (fun () ->
                     match waiting with
@@ -479,15 +607,9 @@ module Session =
             | Some slot, _ ->
                 lock gate (fun () -> slot.Consumed <- true)
                 let actionId = slot.Action.Value
-                result <-
-                    match commandOf actionId with
-                    | Some command -> command
-                    | None -> failwith ("rejected action " + actionId)
+                result <- commandOf actionId player
             | None, Some actionId ->
-                result <-
-                    match commandOf actionId with
-                    | Some command -> command
-                    | None -> failwith ("rejected action " + actionId)
+                result <- commandOf actionId player
             | None, None ->
                 if lock gate (fun () -> cancelled) then
                     running <- false
@@ -508,9 +630,17 @@ module Session =
                         announced <- turn
                         if logPath <> "" then
                             Probe.record logPath ("awaiting action turn=" + string turn) |> ignore
-        if result = "" then
+        if result.IsNone then
             lock gate (fun () -> cancelled <- false)
-        result
+        // A verb that takes no argument comes back as a bare string; a verb with
+        // a resolved target comes back as a (verb, target) pair. Only an
+        // unresolvable action is null, so the caller falls through to the game's
+        // own wait instead of injecting anything. Conflating "no argument" with
+        // "no command" silently swallowed every plain move.
+        match result with
+        | Some(name, null) -> box name
+        | Some pair -> box pair
+        | None -> box null
 
     /// Enqueue a movement script and wait for the turn thread to drain it.
     ///
@@ -523,8 +653,10 @@ module Session =
     let runScript (actions: string[]) (stallMilliseconds: int) =
         let startPublished =
             lock gate (fun () ->
-                for a in actions do
-                    if commandOf a |> Option.isSome then pending.Enqueue a
+                // No pre-validation here: an action can only be resolved against
+                // the live world, which the turn thread has and this thread does
+                // not. supply rejects anything unresolvable and injects nothing.
+                for a in actions do pending.Enqueue a
                 consumed, pending.Count, published)
         let start = DateTime.UtcNow
         let mutable last = startPublished
@@ -596,7 +728,7 @@ module Session =
                 | None, _ | _, None ->
                     fail requestId "invalid_action" "step requires decision_id and action_id"
                 | Some decisionId, Some actionId ->
-                    match commandOf actionId with
+                    match commandOf actionId (livePlayer ()) with
                     | None -> fail requestId "invalid_action" "Action is not a current candidate"
                     | Some _ ->
                         let slot = currentWaiting ()

@@ -42,9 +42,9 @@ static class QudGymPromptProbe
                             typeof(List<string>), typeof(bool), typeof(bool), typeof(bool) })]
     static class ShowConversationHook
     {
-        static void Prefix(string title, XRL.World.GameObject actor, string message, List<string> options)
+        static void Prefix(string Title, XRL.World.GameObject Context, string Intro, List<string> Options)
         {
-            Record("conversation:" + (title ?? "?"), Thread.CurrentThread, options);
+            Record("conversation:" + (Title ?? "?"), Thread.CurrentThread, Options);
         }
     }
 
@@ -53,9 +53,9 @@ static class QudGymPromptProbe
                             typeof(System.Action<XRL.UI.DialogResult>) })]
     static class ShowYesNoHook
     {
-        static void Prefix(string title, string message)
+        static void Prefix(string Message, string Sound)
         {
-            Record("yesno:" + (title ?? "?"), Thread.CurrentThread, null);
+            Record("yesno:" + (Message ?? "?"), Thread.CurrentThread, null);
         }
     }
 }
