@@ -446,6 +446,58 @@ module Session =
             "{\"protocol_version\":\"0.1\",\"request_id\":%s,\"error\":{\"code\":%s,\"message\":%s}}"
             (jsonString requestId) (jsonString code) (jsonString message)
 
+    /// Parse a JSON array of strings, e.g. ["move:E","wait"].
+    ///
+    /// findString only matches a quoted string, so a caller sending an array --
+    /// which is the natural thing to send for a list of actions -- silently
+    /// produced an empty list. The empty list then satisfied
+    /// `doneCount = items.Length` and the run reported success having done
+    /// nothing. This reads the array properly, and a non-array is a hard error
+    /// rather than an empty plan.
+    let private findStringArray name (json: string) =
+        let key = "\"" + name + "\""
+        let at = json.IndexOf(key, 0)
+        if at < 0 then [||]
+        else
+            let mutable j = at + key.Length
+            while j < json.Length && Char.IsWhiteSpace json.[j] do j <- j + 1
+            if j < json.Length && json.[j] = ':' then
+                j <- j + 1
+                while j < json.Length && Char.IsWhiteSpace json.[j] do j <- j + 1
+                if j >= json.Length || json.[j] <> '[' then
+                    failwithf "%s must be a JSON array of strings" name
+                j <- j + 1
+                let acc = ResizeArray<string>()
+                let mutable depth = 1
+                let mutable inString = false
+                let mutable escape = false
+                let mutable current = System.Text.StringBuilder()
+                let mutable sawValue = false
+                while j < json.Length && depth > 0 do
+                    let c = json.[j]
+                    if inString then
+                        if escape then
+                            current.Append(c) |> ignore
+                            escape <- false
+                        elif c = '\\' then escape <- true
+                        elif c = '"' then
+                            inString <- false
+                            acc.Add(current.ToString())
+                            current.Clear() |> ignore
+                        else current.Append(c) |> ignore
+                    else
+                        match c with
+                        | '[' -> depth <- depth + 1
+                        | ']' -> depth <- depth - 1
+                        | '"' -> inString <- true; sawValue <- true
+                        | ',' when depth = 1 -> ()
+                        | _ -> ()
+                    j <- j + 1
+                if inString || depth > 0 then failwithf "%s is not a closed JSON array" name
+                if not sawValue then failwithf "%s must not be an empty array" name
+                acc.ToArray()
+            else [||]
+
     let private findString name (json: string) =
         let key = "\"" + name + "\""
         let mutable start = 0
@@ -838,11 +890,8 @@ module Session =
             // stall is surfaced so the caller can tell a dialogue interrupt from
             // a completed script.
             let items =
-                match if isNull body then None else findString "actions" body with
-                | None -> [||]
-                | Some raw ->
-                    raw.Split([| ','; ' ' |], StringSplitOptions.RemoveEmptyEntries)
-                    |> Array.map (fun a -> a.Trim().Trim('"'))
+                if isNull body then failwith "run requires a body"
+                else findStringArray "actions" body
             // Consumption is not effect. An action is consumed when the game
             // accepts the command and turns it, which happens just as well when
             // the player walks into a wall as when the player crosses a room.

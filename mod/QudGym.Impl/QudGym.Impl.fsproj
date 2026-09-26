@@ -13,6 +13,7 @@
   <ItemGroup>
     <Compile Include="Probe.fs" />
     <Compile Include="Embark.fs" />
+    <Compile Include="Plan.fs" />
     <Compile Include="Session.fs" />
     <!-- Every library preset is embedded, so a boot can select one by id. -->
     <EmbeddedResource Include="../../loadouts/*.json">
