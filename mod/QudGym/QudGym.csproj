@@ -12,6 +12,7 @@
     <Compile Include="Bridge.cs" />
     <Compile Include="Diagnostic.cs" />
     <Compile Include="TurnProbe.cs" />
+    <Compile Include="PromptProbe.cs" />
     <Reference Include="Assembly-CSharp">
       <HintPath>$(QudManaged)/Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
