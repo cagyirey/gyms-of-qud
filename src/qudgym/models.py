@@ -14,7 +14,10 @@ class Model(BaseModel):
 
 class CandidateAction(Model):
     id: Identifier
-    kind: Literal["move", "wait", "answer", "interact", "ability", "inventory"]
+    # Semantic categories, not verbs. A long move and a single step are both
+    # "move"; the id distinguishes them. "info" covers read-only console verbs
+    # such as look, quests, journal and message history.
+    kind: Literal["move", "wait", "answer", "interact", "ability", "inventory", "info"]
     label: str
     # Arguments are descriptive metadata, not an arbitrary command execution surface.
     arguments: dict[str, JsonValue] = Field(default_factory=dict)
@@ -40,6 +43,26 @@ class PerceivedEntity(Model):
     y: int
     # Deliberately no blueprint, true identity, precise enemy HP, or hidden effects.
     perceived_status: str | None = None
+    # Presentation only: the glyph the player sees. None when the build does not
+    # expose one, which is reported rather than omitted so an agent can tell
+    # "no glyph" from "not looked at".
+    glyph: str | None = None
+    # The game's own actor predicate when the build exposes one. Optional
+    # because it does not resolve on every build; a missing value means unknown,
+    # not "not an actor".
+    is_actor: bool | None = None
+
+
+class ViewInfo(Model):
+    """How much of the world the observation actually covers.
+
+    A radius tells the agent the edge of what it can see, so a missing
+    neighbour is not mistaken for the edge of the map.
+    """
+
+    radius: int = Field(ge=0)
+    zone_width: int = Field(ge=0)
+    zone_height: int = Field(ge=0)
 
 
 class Prompt(Model):
@@ -58,6 +81,7 @@ class Observation(Model):
     messages: tuple[str, ...] = ()
     prompt: Prompt | None = None
     actions: tuple[CandidateAction, ...]
+    view: ViewInfo | None = None
 
     @model_validator(mode="after")
     def consistent_boundary(self):

@@ -194,15 +194,22 @@ module Session =
     /// Read-only entity projection. Only objects the game already considers
     /// visible in a visible cell are reported, and only public presentation
     /// fields: no blueprint metadata, no hidden stats, no internal identity.
-    /// Read a boolean instance property, defaulting to false.
+    /// Read a boolean instance property, distinguishing "absent" from "false".
+    ///
+    /// A predicate the build does not expose must report unknown rather than
+    /// false, or a caller will read "not an actor" out of "this build cannot say".
     let private boolOfMember (target: obj) (name: string) =
         try
             let p = target.GetType().GetProperty(name, BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.FlattenHierarchy)
-            if isNull p then false else p.GetValue(target, null) :?> bool
-        with _ -> false
+            if isNull p then None
+            else
+                match p.GetValue(target, null) with
+                | (:? bool as b) -> Some b
+                | _ -> None
+        with _ -> None
 
     let private entityEntries (player: obj) (zone: obj) (x0: int) (y0: int) =
-        let acc = ResizeArray<string * string * int * int * bool * string * bool>()
+        let acc = ResizeArray<string * string * int * int * bool * string * bool option>()
         // The player is reported once, anchored, and never mixed into the
         // surrounding cells.
         let playerName =
@@ -211,7 +218,7 @@ module Session =
                 | :? string as s when s <> "" -> s
                 | _ -> "you"
             with _ -> "you"
-        acc.Add((playerName, "self", 0, 0, true, "", true)) |> ignore
+        acc.Add((playerName, "self", 0, 0, true, "", Some true)) |> ignore
         let seen = HashSet<string>()
         for dy in -radius .. radius do
             for dx in -radius .. radius do
@@ -253,10 +260,18 @@ module Session =
     let private entitiesJson (player: obj) (zone: obj) (x0: int) (y0: int) =
         entityEntries player zone x0 y0
         |> Array.mapi (fun i (name, kind, dx, dy, isSelf, glyphChar, isActor) ->
+            // Absolute coordinates, matching PerceivedEntity. Relative offsets
+            // are derivable from player x/y, so they are not sent twice.
+            let role = if isSelf then "self" else kind
+            let status = sprintf "%s|%+d,%+d" role dx dy
             sprintf
-                "{\"id\":\"e%d\",\"name\":%s,\"kind\":%s,\"dx\":%d,\"dy\":%d,\"glyph\":%s,\"is_self\":%s,\"is_actor\":%s}"
-                i (jsonString name) (jsonString kind) dx dy (jsonString glyphChar)
-                (if isSelf then "true" else "false") (if isActor then "true" else "false"))
+                "{\"id\":\"e%d\",\"name\":%s,\"x\":%d,\"y\":%d,\"perceived_status\":%s,\"glyph\":%s,\"is_actor\":%s}"
+                i (jsonString name) (x0 + dx) (y0 + dy) (jsonString status)
+                (jsonString glyphChar)
+                (match isActor with
+                 | Some true -> "true"
+                 | Some false -> "false"
+                 | None -> "null"))
         |> String.concat ","
         |> fun s -> "[" + s + "]"
 
@@ -310,7 +325,7 @@ module Session =
 
         for (name, _, _) in directions do
             parts.Add(sprintf
-                "{\"id\":%s,\"kind\":\"move_far\",\"label\":%s,\"arguments\":{}}"
+                "{\"id\":%s,\"kind\":\"move\",\"label\":%s,\"arguments\":{\"steps\":\"far\"}}"
                 (jsonString ("far:" + name)) (jsonString ("Move far " + name)))
 
         // Interaction, one entry per distinct visible interactable name.
@@ -325,12 +340,14 @@ module Session =
                 // not resolve on this build (false even for NPCs), and gating on
                 // it silently removed talking as a capability. An agent picks an
                 // NPC by name; the game decides whether the talk does anything.
-                let verbs = [| "talk"; "use"; "get" |]
-                for verb in verbs do
+                // Verbs map onto the contract's semantic categories.
+                let verbs =
+                    [| ("talk", "interact"); ("use", "interact"); ("get", "inventory") |]
+                for (verb, kind) in verbs do
                     parts.Add(sprintf
                         "{\"id\":%s,\"kind\":%s,\"label\":%s,\"arguments\":{\"target\":%s}}"
                         (jsonString (verb + ":" + name))
-                        (jsonString verb)
+                        (jsonString kind)
                         (jsonString (verb + " " + name))
                         (jsonString name))
 
@@ -339,7 +356,7 @@ module Session =
                ("history", "Message history"); ("wait", "Wait one turn") |]
         for (cid, label) in consoleVerbs do
             parts.Add(sprintf
-                "{\"id\":%s,\"kind\":\"console\",\"label\":%s,\"arguments\":{}}"
+                "{\"id\":%s,\"kind\":\"info\",\"label\":%s,\"arguments\":{}}"
                 (jsonString cid) (jsonString label))
 
         "[" + String.concat "," (parts |> Seq.toArray) + "]"

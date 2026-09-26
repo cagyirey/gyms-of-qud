@@ -16,6 +16,8 @@ module Embark =
     // Prepared during the early phase, while the UI context is live and the
     // core thread is not yet inside the game's boot.
     let mutable private prepared : (obj * obj) option = None
+    // prepare() has no path parameter, but the builder fallback wants to log.
+    let mutable private logPath = ""
 
     let allowPopup () = not suppressPopups
 
@@ -154,13 +156,34 @@ module Embark =
             with _ ->
                 try invoke "Clear" [||] queue |> ignore
                 with _ -> ()
+        // Prefer a builder that needs no Unity main-thread work.
+        //
+        // The onUi hop is the sole cause of the intermittent embark: posting to
+        // GameManager.Instance.uiSynchronizationContext from inside the game's
+        // own boot races the main thread, and the turn thread then waits on a
+        // context nobody is pumping. EmbarkBuilder is a MonoBehaviour, but
+        // InitModulesFromCode only writes module data, so a detached instance is
+        // tried first and the hop is kept strictly as a fallback.
+        let builderType = ty "XRL.CharacterBuilds.EmbarkBuilder"
+        let mutable builder = null
+        try
+            let detached = Activator.CreateInstance(builderType)
+            invoke "InitModulesFromCode" [| box code; box true |] detached |> ignore
+            builder <- detached
+        with ex ->
+            if logPath <> "" then
+                Probe.record logPath ("builder detached path failed: " + ex.GetBaseException().Message) |> ignore
         let builder =
-            onUi (fun () ->
-                let host = instanceValue "gameObject" manager
-                let created =
-                    invoke "AddComponent" [| box (ty "XRL.CharacterBuilds.EmbarkBuilder") |] host
-                invoke "InitModulesFromCode" [| box code; box true |] created |> ignore
-                created)
+            if isNull builder then
+                onUi (fun () ->
+                    let host = instanceValue "gameObject" manager
+                    let created = invoke "AddComponent" [| box builderType |] host
+                    invoke "InitModulesFromCode" [| box code; box true |] created |> ignore
+                    created)
+            else
+                if logPath <> "" then
+                    Probe.record logPath "builder prepared without the ui hop" |> ignore
+                builder
         game, builder
 
     // Silent loadCode writes module data without re-running shouldBeEnabled.
@@ -335,6 +358,7 @@ module Embark =
                 | :? bool as onCore when onCore ->
                     started <- true
                     try
+                        logPath <- path
                         Probe.record path ("embark prepare " + describeFlags ()) |> ignore
                         let json = loadoutJson ()
                         let code =
@@ -359,6 +383,7 @@ module Embark =
         if not proceed then ()
         else
             try
+                logPath <- path
                 Probe.record path ("embark start " + describeFlags ()) |> ignore
                 let game, builder = prepared.Value
                 let info, names = copyIntoInfo builder
