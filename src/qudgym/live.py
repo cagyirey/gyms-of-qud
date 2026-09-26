@@ -25,6 +25,7 @@ import ipaddress
 import json
 import pathlib
 import secrets
+import time
 import urllib.parse
 from typing import Any
 
@@ -126,8 +127,24 @@ class LiveBackend:
             self._caps = Capabilities.model_validate(self._call("hello"))
         return self._caps
 
-    def reset(self, *, seed: int = 0) -> Transition:
-        return Transition.model_validate(self._call("reset", seed=seed))
+    def reset(self, *, seed: int = 0, boundary_timeout: float = 600.0) -> Transition:
+        """Claim the episode, waiting for the game's first decision boundary.
+
+        The mod answers no_boundary when it has not published a boundary yet,
+        which is the normal state for the first minute or two of a live game.
+        Retrying on that specific code is safe and is not the forbidden case:
+        the server has said the request did not commit, so there is no
+        ambiguity to reconcile. An ambiguous outcome still raises
+        TransportUncertain and is never retried.
+        """
+        deadline = time.monotonic() + boundary_timeout
+        while True:
+            try:
+                return Transition.model_validate(self._call("reset", seed=seed))
+            except QudGymError as exc:
+                if exc.code != "no_boundary" or time.monotonic() >= deadline:
+                    raise
+                time.sleep(2.0)
 
     def observe(self) -> Observation:
         return Observation.model_validate(self._call("observe"))

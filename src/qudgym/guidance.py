@@ -66,14 +66,19 @@ class ActionSpace:
     def extract(self, text: str) -> str:
         """Pull the action id out of a model response.
 
-        Strict on purpose. A bare id, a fenced block, a JSON object with
-        action_id, an "action_id: x" line, and a single-item bullet are all
-        accepted. Prose is not: "I pick open" is not silently coerced into
-        "answer:open", because a wrong action is far more expensive here than a
-        retry. The caller re-prompts with the candidate list instead.
+        Generous about decoration, strict about meaning. A model that was told
+        to reply with an action id will often wrap that id in whatever the
+        markdown habit suggests -- `**Action: `move:E`**`, a fenced block, a
+        JSON object, "action_id: x", a bullet. All of those carry exactly one
+        action id and are accepted, because rejecting them would reject a
+        compliant answer and cost a retry for nothing.
+
+        What is refused is prose that does not name a candidate. "I pick open"
+        is not coerced into "answer:open": a wrong action is far more expensive
+        here than a retry, and guessing is how a wrong action happens.
         """
         candidate = text.strip()
-        if candidate.startswith("```"):
+        if "```" in candidate:
             lines = [ln for ln in candidate.splitlines() if not ln.strip().startswith("```")]
             candidate = "\n".join(lines).strip()
         if candidate in self.candidates:
@@ -83,35 +88,52 @@ class ActionSpace:
         except (ValueError, TypeError):
             payload = None
         if isinstance(payload, dict):
-            for key in ("action_id", "action", "id"):
+            for key in ("action_id", "action", "id", "choice", "answer"):
                 value = payload.get(key)
-                if isinstance(value, str) and value in self.candidates:
-                    return value
+                if isinstance(value, str) and self._match(value):
+                    return self._match(value)  # type: ignore[return-value]
         for line in candidate.splitlines():
             stripped = line.strip()
-            if stripped in self.candidates:
-                return stripped
-            # "action_id: move:E" and friends.
-            for sep in (":", "="):
+            found = self._match(stripped)
+            if found:
+                return found
+            # "Action: move:E", "action_id = move:E", "**Move** -> move:E".
+            for sep in (":", "=", "->"):
                 if sep in stripped:
-                    tail = stripped.split(sep, 1)[1].strip().strip("\"'`.,")
-                    if tail in self.candidates:
-                        return tail
-            # A single-item bullet.
-            bullet = stripped.lstrip("-*0123456789. \t").strip()
-            if bullet in self.candidates:
-                return bullet
+                    found = self._match(stripped.split(sep, 1)[1])
+                    if found:
+                        return found
         raise IllegalAction(candidate[:120], self.action_ids)
 
-    def retry_message(self, rejected: str) -> str:
-        """What to send back after a rejection.
+    # Markdown emphasis, code ticks, quotes and trailing sentence punctuation
+    # are all decoration around the id rather than part of it.
+    _DECORATION = "*_`\"'.,:;!?()[]{}"
 
-        The model gets the exact legal set rather than a paraphrase, because
-        the grammar is already the authority and this just re-states it.
+    def _match(self, token: str) -> str | None:
+        """Resolve one token to a candidate, or None if it names no candidate."""
+        if not token:
+            return None
+        cleaned = token.strip().strip(self._DECORATION).strip()
+        if cleaned in self.candidates:
+            return cleaned
+        # "**Move east**" or "`move:E`" where the id is embedded in a phrase.
+        for candidate in self.candidates:
+            if candidate in cleaned and len(cleaned) <= len(candidate) + 24:
+                return candidate
+        return None
+
+    def retry_message(self, rejected: str) -> str:
+        """Appended to the prompt after a rejection, never sent alone.
+
+        The correction keeps the observation. An earlier version replaced the
+        prompt with this text, which stripped the game state and left the model
+        with a bare list of ids and no idea what it was being asked -- it
+        answered "I'm a coding assistant running in OpenCode". Restating the
+        format against the same context is what a retry is for.
         """
         return (
-            f"{rejected!r} is not a legal action. "
-            f"Reply with exactly one of these ids and nothing else: "
+            f"\nYour previous reply was not accepted: {rejected.strip()[:200]!r}\n"
+            f"Reply with exactly one action id, copied from this list, and no other text:\n"
             f"{', '.join(self.candidates)}"
         )
 

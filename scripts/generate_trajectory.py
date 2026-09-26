@@ -119,7 +119,7 @@ def _decide(observation: Observation, recorder: SessionRecorder, policy,
             return chosen
         if verbose:
             print(f"  {observation.decision_id} attempt {attempt} REJECTED: {raw[:70]!r}")
-        system, prompt = SYSTEM, space.retry_message(raw)
+        prompt = prompt + space.retry_message(raw)
     raise SystemExit(
         f"policy produced no legal action in {max_attempts} attempts; "
         "the rejections are recorded and no action was substituted"

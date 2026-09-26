@@ -38,6 +38,22 @@ def obs(*actions: CandidateAction, phase: str = "command", prompt: Prompt | None
     )
 
 
+def test_actions_carry_their_description_and_arguments():
+    # An id alone is not an interface. The model needs to know what an action
+    # does, and the contract already has that in label and arguments.
+    o = obs(
+        CandidateAction(id="talk:Mehmet", kind="interact", label="talk to Mehmet",
+                        arguments={"target": "Mehmet"}),
+        CandidateAction(id="get:door", kind="inventory", label="pick up the door",
+                        arguments={"target": "door"}),
+    )
+    text = build_prompt(o, build_action_space(o))
+    assert "talk to Mehmet" in text
+    assert "pick up the door" in text
+    assert '"target": "Mehmet"' in text
+    assert "interact:" in text and "inventory:" in text
+
+
 def test_prompt_lists_exactly_the_legal_actions():
     o = obs(
         CandidateAction(id="move:E", kind="move", label="Move E"),
@@ -107,5 +123,7 @@ def test_prompt_is_bounded_so_it_stays_cheap(phase: str):
         prompt=Prompt(kind="choice", text="Open the passage?") if phase == "prompt" else None,
     )
     text = build_prompt(o, build_action_space(o))
-    # A long prompt is a prompt the model starts explaining in.
-    assert len(text) < 600
+    # Bounded per action, not in total: the interface description is the point
+    # of the prompt, and truncating it is what leaves a model guessing.
+    longest = max(len(line) for line in text.splitlines())
+    assert longest < 200, longest

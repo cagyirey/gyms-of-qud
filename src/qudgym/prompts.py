@@ -6,22 +6,30 @@ at this boundary. That is the whole point -- a hand-written prompt enumerates
 actions that may not exist, and a model that follows it confidently is worse
 than one that was never told.
 
-Kept short on purpose. The observation already carries state, so the prompt
-carries only the decision: what kind of boundary this is, what the action
-affects, and the exact reply format. Long instructions did not make the model
-more correct; they made it more likely to explain itself instead of answering.
+The action list carries each action's description and arguments, not just its
+id. An id is an opaque handle; a model shown bare ids is being asked to guess
+what they do, and a list of ids is not an interface.
 """
 from __future__ import annotations
 
+import json
+
 from .guidance import ActionSpace
-from .models import Observation
+from .models import CandidateAction, Observation
 
 SYSTEM = """\
-You choose one action per turn in a turn-based roguelike.
+You are playing Caves of Qud, a turn-based roguelike, through a harness.
 
-Reply with exactly one action id from the legal list, and nothing else. \
-No explanation, no punctuation, no code fence. If you are unsure, reply with \
-the wait action.\
+Each turn you receive the current game state and the complete list of actions
+available to you. You choose one, the game executes it, and you see the
+resulting state.
+
+The action_id values are opaque handles. Choose by what an action does, using
+its description and arguments, not by how its id happens to read.
+
+Reply with exactly one action_id, copied from the list, and nothing else. No
+explanation, no punctuation, no code fence, no restating of the state. If no
+action is clearly better than waiting, reply with the wait action.
 """
 
 
@@ -58,11 +66,20 @@ def build_prompt(observation: Observation, space: ActionSpace) -> str:
     if observation.prompt:
         lines.append(f'The prompt asks: "{observation.prompt.text}"')
 
-    by_kind: dict[str, list[str]] = {}
+    by_kind: dict[str, list[CandidateAction]] = {}
     for action in observation.actions:
-        by_kind.setdefault(action.kind, []).append(action.id)
-    rendered = "; ".join(f"{kind}: {', '.join(ids)}" for kind, ids in by_kind.items())
-    lines.append(f"Legal actions -> {rendered}")
+        by_kind.setdefault(action.kind, []).append(action)
+
+    lines.append("You may take exactly one of these actions this turn:")
+    for kind, actions in by_kind.items():
+        lines.append(f"  {kind}:")
+        for action in actions:
+            detail = f"action_id={action.id}"
+            if action.label:
+                detail += f"  ({action.label})"
+            if action.arguments:
+                detail += "  args=" + json.dumps(action.arguments, sort_keys=True)
+            lines.append(f"    {detail}")
 
     return "\n".join(lines)
 

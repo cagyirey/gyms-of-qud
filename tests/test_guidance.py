@@ -73,6 +73,34 @@ def test_extract_refuses_anything_else_instead_of_guessing():
             space.extract(bad)
 
 
+def test_extract_accepts_the_markdown_a_told_model_actually_produces():
+    # A model told to reply with an action id habitually wraps it. Rejecting
+    # these would reject a compliant answer and burn a retry for nothing.
+    space = build_action_space(make_observation())
+    for good in (
+        "**Action: `move:E`**",
+        "**move:E**",
+        "`move:E`",
+        "Action: move:E",
+        "**Action:** move:E",
+        "The action is *move:E*.",
+        "```\nAction: move:E\n```",
+        "I will move east.\n\n**Action: `move:E`**",
+        '{"action": "move:E"}',
+    ):
+        assert space.extract(good) == "move:E", good
+
+
+def test_the_retry_keeps_the_observation_rather_than_replacing_it():
+    # Replacing the prompt with a bare id list left the model with no game
+    # state, and it answered that it was a coding assistant instead.
+    space = build_action_space(make_observation())
+    correction = space.retry_message("I pick something")
+    assert "move:E" in correction
+    assert "wait" in correction
+    assert "not accepted" in correction
+
+
 def test_a_boundary_with_no_actions_is_rejected():
     # The contract already forbids a nonterminal boundary with no actions; the
     # action space must not be the place that discovers it late.
