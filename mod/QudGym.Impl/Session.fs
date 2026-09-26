@@ -44,6 +44,12 @@ module Session =
     let mutable private waiting : Slot option = None
     let mutable private decisions = 0
     let mutable private resetUsed = false
+    // A plan, when set, supplies the action instead of the client queue. It is
+    // advanced from inside supply, i.e. on the game turn thread, so the tests
+    // it evaluates read the same live world the observation is built from.
+    let mutable private currentPlan : Plan.Plan option = None
+    let mutable private planNote = ""
+    let mutable private planSteps = 0
     // A reset that is waiting for its first boundary holds a claim but has not
     // consumed the episode, so a bounded timeout leaves the episode resettable.
     let mutable private resetInFlight = false
@@ -707,8 +713,41 @@ module Session =
                     match waiting with
                     | Some slot when slot.Action.IsSome && not slot.Consumed -> Some slot
                     | _ -> None)
+            // A plan, if one is running, decides this turn's action. It is
+            // consulted before the client queue so a plan is not starved by a
+            // waiting client, and it is advanced exactly one action per turn so
+            // the world is observed between steps.
+            let fromPlan =
+                match currentPlan with
+                | None -> None
+                | Some p ->
+                    let available a = commandOf a player |> Option.isSome
+                    match Plan.advance available player p with
+                    | Plan.Stepped(action, rest) ->
+                        lock gate (fun () ->
+                            planSteps <- planSteps + 1
+                            currentPlan <- Some rest)
+                        Some action
+                    | Plan.Skipped rest ->
+                        lock gate (fun () -> currentPlan <- Some rest)
+                        None
+                    | Plan.Unsupported(action, rest) ->
+                        lock gate (fun () ->
+                            currentPlan <- None
+                            planNote <- "unsupported action: " + action)
+                        None
+                    | Plan.Exhausted _ ->
+                        lock gate (fun () ->
+                            currentPlan <- None
+                            planNote <- "repeat limit reached")
+                        None
+                    | Plan.Finished ->
+                        lock gate (fun () ->
+                            currentPlan <- None
+                            planNote <- "plan finished")
+                        None
             let fromQueue =
-                if staged.IsSome then None
+                if staged.IsSome || fromPlan.IsSome then None
                 else
                     lock gate (fun () ->
                         if pending.Count > 0 then
@@ -716,16 +755,19 @@ module Session =
                             consumed <- consumed + 1
                             Some a
                         else None)
-            match staged, fromQueue with
-            | Some slot, _ ->
+            match staged, fromPlan, fromQueue with
+            | Some slot, _, _ ->
                 lock gate (fun () -> slot.Consumed <- true)
                 let actionId = slot.Action.Value
                 result <- commandOf actionId player
                 if result.IsNone then lock gate (fun () -> rejected <- rejected + 1)
-            | None, Some actionId ->
+            | None, Some actionId, _ ->
                 result <- commandOf actionId player
                 if result.IsNone then lock gate (fun () -> rejected <- rejected + 1)
-            | None, None ->
+            | None, None, Some actionId ->
+                result <- commandOf actionId player
+                if result.IsNone then lock gate (fun () -> rejected <- rejected + 1)
+            | None, None, None ->
                 if lock gate (fun () -> cancelled) then
                     running <- false
                 else
@@ -935,6 +977,38 @@ module Session =
                     (if completed && rejectedCount = 0 then "true" else "false")
                     (if (not completed) && halted then "true" else "false")
                     movedX movedY obs)
+        | "plan" ->
+            // Submit a program. It runs on the game turn thread from the next
+            // boundary, one action per turn, and reports how it ended rather
+            // than assuming success: a plan that names an action the world does
+            // not offer stops with unsupported_action, because a pushed and
+            // ignored action is indistinguishable from one that took effect.
+            match findString "program" body with
+            | None -> fail requestId "no_program" "plan requires a program string"
+            | Some text ->
+                try
+                    let parsed = Plan.parse text
+                    let named = Plan.actions parsed |> List.distinct
+                    lock gate (fun () ->
+                        currentPlan <- Some parsed
+                        planNote <- ""
+                        planSteps <- 0)
+                    ok requestId
+                        (sprintf
+                            "{\"plan_steps\":%d,\"plan_actions\":%s}"
+                            (List.length named)
+                            (jsonString (String.concat "," named)))
+                with ex ->
+                    fail requestId "bad_program" (ex.GetBaseException().Message)
+        | "plan_status" ->
+            let running, steps, note =
+                lock gate (fun () -> currentPlan.IsSome, planSteps, planNote)
+            ok requestId
+                (sprintf
+                    "{\"running\":%s,\"steps_taken\":%d,\"note\":%s}"
+                    (if running then "true" else "false")
+                    steps
+                    (jsonString note))
         | "snapshot" | "restore" | "release" | "state_hash" ->
             fail requestId "unsupported" "Live control does not expose snapshots or a full-state hash"
         | _ -> fail requestId "unsupported" "Unknown operation"

@@ -228,3 +228,57 @@ module Plan =
             | Unsupported(a, _) -> Unsupported(a, rest)
             | Finished -> advance available player rest
             | Exhausted _ -> advance available player rest
+
+    // -- a writable syntax ------------------------------------------------
+
+    /// Parse a test: at X Y | near X Y R | sees R <name> | says <text>
+    let private parseTest (text: string) : Test =
+        let parts = text.Split([| ' ' |], StringSplitOptions.RemoveEmptyEntries)
+        match parts with
+        | [| "at"; x; y |] -> at (int x) (int y)
+        | [| "near"; x; y; r |] -> near (int x) (int y) (int r)
+        | [| "sees"; r |] -> failwith "sees needs a radius and a name: sees 2 watervine"
+        | [| "says" |] -> failwith "says needs text"
+        | _ when parts.Length > 1 && parts.[0] = "sees" ->
+            let name = parts |> Array.skip 2 |> String.concat " "
+            sees (int parts.[1]) name
+        | _ when parts.Length > 0 && parts.[0] = "says" ->
+            said (parts |> Array.skip 1 |> String.concat " ")
+        | _ -> failwithf "unknown test: %s" text
+
+    /// Parse a plan from text, one step per line.
+    ///
+    /// Line based on purpose: a program someone can read and edit is the point,
+    /// and a line-per-step form is diffable and cannot hide structure in
+    /// indentation. Blank lines and `#` comments are ignored.
+    ///
+    ///     move:E
+    ///     if sees 2 watervine farmer then talk:watervine farmer
+    ///
+    /// An action is named, never invented: a step naming something the world
+    /// does not offer comes back Unsupported at run time rather than being
+    /// pushed and ignored, which is indistinguishable from success.
+    let parse (raw: string) : Plan =
+        // The transport's string reader is hand-rolled and does not unescape
+        // JSON string escapes, so a program arrives with a literal backslash-n
+        // where its newlines were. Restore them before splitting, or the whole
+        // program parses as one action.
+        let text =
+            raw.Replace("\\r", "\r").Replace("\\n", "\n").Replace("\\t", "\t")
+        let steps =
+            text.Split([| char 10; char 13 |], StringSplitOptions.RemoveEmptyEntries)
+            |> Array.choose (fun raw ->
+                let line = raw.Trim()
+                if line = "" || line.StartsWith("#") then None
+                elif line.StartsWith("if ", StringComparison.Ordinal) then
+                    let body = line.Substring(3).Trim()
+                    let marker = " then "
+                    let at = body.IndexOf(marker, StringComparison.Ordinal)
+                    if at < 0 then
+                        failwithf "step needs 'if <test> then <action>': %s" line
+                    let testText = body.Substring(0, at).Trim()
+                    let action = body.Substring(at + marker.Length).Trim()
+                    if action = "" then failwithf "step has no action: %s" line
+                    Some(Act(action, Some(parseTest testText)))
+                else Some(Act(line, None)))
+        All(Array.toList steps)
