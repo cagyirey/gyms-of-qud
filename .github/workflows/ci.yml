@@ -156,8 +156,104 @@ jobs:
           assert len(list(store.rglob("global_config.json"))) == 1
           assert not list(store.rglob("rollouts.json"))
           PY
+      - name: Exercise lifecycle cancellation paths
+        run: |
+          set -euo pipefail
+          # The wrapper proves head-port ownership with lsof; provision it rather
+          # than depending on the runner image happening to ship it.
+          if ! command -v lsof >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq lsof
+          fi
+          command -v lsof
+          CANCEL_MODEL_PID=""
+          CANCEL_WRAPPER_PIDS=()
+          cleanup_cancel() {
+            local pid
+            for pid in "${CANCEL_WRAPPER_PIDS[@]:-}"; do
+              if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                kill -KILL "$pid" 2>/dev/null || true
+                wait "$pid" 2>/dev/null || true
+              fi
+            done
+            if [[ -n "$CANCEL_MODEL_PID" ]] && kill -0 "$CANCEL_MODEL_PID" 2>/dev/null; then
+              kill -TERM "$CANCEL_MODEL_PID" 2>/dev/null || true
+              wait "$CANCEL_MODEL_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_cancel EXIT
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          NEMO_GYM_SCRIPTED_MODEL_DELAY=5 \
+          nemo-gym/.venv/bin/uvicorn \
+            --app-dir "$GITHUB_WORKSPACE" \
+            tests.fixtures.nemo_gym_scripted_model:app \
+            --host 127.0.0.1 --port 18084 >"$RUNNER_TEMP/qudgym-cancel-model.log" 2>&1 &
+          CANCEL_MODEL_PID=$!
+          for _ in $(seq 1 50); do
+            if curl -sf http://127.0.0.1:18084/health >/dev/null; then break; fi
+            sleep 0.2
+          done
+          curl -sf http://127.0.0.1:18084/health >/dev/null
+
+          rm -rf "$RUNNER_TEMP/qudgym-cancel-readiness"
+          NEMO_GYM_ROOT="$GITHUB_WORKSPACE/nemo-gym" \
+          NEMO_GYM_MODEL=qudgym-scripted-smoke \
+          NEMO_GYM_MODEL_URL=http://127.0.0.1:18084/v1 \
+          NEMO_GYM_MODEL_API_KEY=dummy \
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          NEMO_GYM_MODEL_TYPE=vllm_model \
+          NEMO_GYM_REPEATS=2 \
+          NEMO_GYM_CONCURRENCY=1 \
+          NEMO_GYM_HEAD_PORT=18085 \
+          NEMO_GYM_READY_TIMEOUT_SECONDS=120 \
+          scripts/run_nemo_gym_mock.sh "$RUNNER_TEMP/qudgym-cancel-readiness" >"$RUNNER_TEMP/qudgym-cancel-readiness.stdout" 2>&1 &
+          CANCEL_READY_PID=$!
+          CANCEL_WRAPPER_PIDS+=("$CANCEL_READY_PID")
+          for _ in $(seq 1 1200); do
+            if grep -q 'Waiting for head server' "$RUNNER_TEMP/qudgym-cancel-readiness/gym-readiness.log" 2>/dev/null; then break; fi
+            sleep 0.1
+          done
+          grep -q 'Waiting for head server' "$RUNNER_TEMP/qudgym-cancel-readiness/gym-readiness.log"
+          kill -TERM "$CANCEL_READY_PID"
+          if wait "$CANCEL_READY_PID"; then CANCEL_READY_STATUS=0; else CANCEL_READY_STATUS=$?; fi
+          test "$CANCEL_READY_STATUS" -eq 143
+          test ! -f "$RUNNER_TEMP/qudgym-cancel-readiness/gym-eval-run.log"
+          test ! -f "$RUNNER_TEMP/qudgym-cancel-readiness/gym-eval-profile.log"
+
+          rm -rf "$RUNNER_TEMP/qudgym-cancel-eval"
+          NEMO_GYM_ROOT="$GITHUB_WORKSPACE/nemo-gym" \
+          NEMO_GYM_MODEL=qudgym-scripted-smoke \
+          NEMO_GYM_MODEL_URL=http://127.0.0.1:18084/v1 \
+          NEMO_GYM_MODEL_API_KEY=dummy \
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          NEMO_GYM_MODEL_TYPE=vllm_model \
+          NEMO_GYM_REPEATS=2 \
+          NEMO_GYM_CONCURRENCY=1 \
+          NEMO_GYM_HEAD_PORT=18086 \
+          NEMO_GYM_READY_TIMEOUT_SECONDS=120 \
+          scripts/run_nemo_gym_mock.sh "$RUNNER_TEMP/qudgym-cancel-eval" >"$RUNNER_TEMP/qudgym-cancel-eval.stdout" 2>&1 &
+          CANCEL_EVAL_PID=$!
+          CANCEL_WRAPPER_PIDS+=("$CANCEL_EVAL_PID")
+          for _ in $(seq 1 1200); do
+            if grep -q 'All .* servers ready' "$RUNNER_TEMP/qudgym-cancel-eval/gym-readiness.log" 2>/dev/null; then break; fi
+            sleep 0.1
+          done
+          grep -q 'All .* servers ready' "$RUNNER_TEMP/qudgym-cancel-eval/gym-readiness.log"
+          for _ in $(seq 1 1200); do
+            if [[ -f "$RUNNER_TEMP/qudgym-cancel-eval/gym-eval-run.log" ]]; then break; fi
+            sleep 0.05
+          done
+          test -f "$RUNNER_TEMP/qudgym-cancel-eval/gym-eval-run.log"
+          kill -TERM "$CANCEL_EVAL_PID"
+          if wait "$CANCEL_EVAL_PID"; then CANCEL_EVAL_STATUS=0; else CANCEL_EVAL_STATUS=$?; fi
+          test "$CANCEL_EVAL_STATUS" -eq 143
+          test ! -f "$RUNNER_TEMP/qudgym-cancel-eval/gym-eval-profile.log"
+      - name: Check the head-ownership regression
+        run: bash tests/fixtures/nemo_gym_head_ownership_test.sh
       - name: Check the native lifecycle wrapper
-        run: bash -n scripts/run_nemo_gym_mock.sh
+        run: |
+          bash -n scripts/run_nemo_gym_mock.sh
+          shellcheck scripts/run_nemo_gym_mock.sh tests/fixtures/nemo_gym_head_ownership_test.sh
 
   bridge-core:
     runs-on: ubuntu-latest

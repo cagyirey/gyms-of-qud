@@ -23,6 +23,15 @@ def _check_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="invalid fixture credential")
 
 
+def _apply_test_delay() -> None:
+    try:
+        delay = float(os.environ.get("NEMO_GYM_SCRIPTED_MODEL_DELAY", "0"))
+    except ValueError:
+        return
+    if delay > 0:
+        time.sleep(delay)
+
+
 def _text(value: Any) -> str | None:
     if isinstance(value, str):
         return value
@@ -84,6 +93,7 @@ async def models(request: Request) -> dict[str, Any]:
 @app.post("/v1/responses")
 async def responses(request: Request) -> dict[str, Any]:
     _check_auth(request)
+    _apply_test_delay()
     body = await request.json()
     response_number = next(_response_ids)
     output = _select_action(body)
@@ -115,6 +125,7 @@ async def responses(request: Request) -> dict[str, Any]:
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request) -> dict[str, Any]:
     _check_auth(request)
+    _apply_test_delay()
     body = await request.json()
     output = _select_action({"input": body.get("messages", [])})
     return {

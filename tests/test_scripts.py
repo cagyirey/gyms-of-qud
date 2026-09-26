@@ -3,6 +3,7 @@ import json
 import os
 import runpy
 import shutil
+import socket
 import subprocess
 from pathlib import Path
 import pytest
@@ -196,6 +197,56 @@ def test_mlflow_rejects_credentials_in_tracking_uri(tmp_path):
     assert result.returncode == 2
     assert 'must not contain userinfo, query, or fragment credentials' in result.stderr
     assert 'test-secret' not in result.stderr
+
+
+def test_wrapper_head_ownership_rejects_foreign_and_missing_heads():
+    result = subprocess.run(
+        ['bash', str(ROOT / 'tests/fixtures/nemo_gym_head_ownership_test.sh')],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 77:
+        pytest.skip('lsof is required for the head-ownership checks')
+    assert result.returncode == 0, result.stderr
+    assert 'head ownership regression checks passed' in result.stdout
+
+
+@pytest.mark.skipif(
+    shutil.which('lsof') is None,
+    reason='the wrapper requires lsof to verify head-port ownership',
+)
+def test_wrapper_rejects_occupied_head_port_before_starting_gym(tmp_path):
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    env = os.environ.copy()
+    for key in tuple(env):
+        if key.startswith('NEMO_GYM_MLFLOW_'):
+            env.pop(key)
+    env.update({
+        'NEMO_GYM_ROOT': str(ROOT),
+        'NEMO_GYM_MODEL': 'contract-smoke',
+        'NEMO_GYM_MODEL_URL': 'http://127.0.0.1:1/v1',
+        'NEMO_GYM_MODEL_API_KEY': 'dummy',
+        'NEMO_GYM_HEAD_PORT': str(port),
+    })
+    try:
+        result = subprocess.run(
+            [str(ROOT / 'scripts/run_nemo_gym_mock.sh'), str(tmp_path / 'output')],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        listener.close()
+    assert result.returncode == 2
+    assert f'NEMO_GYM_HEAD_PORT {port} is already in use' in result.stderr
+    assert not (tmp_path / 'output').exists()
 
 
 def test_mlflow_rollout_upload_requires_explicit_mlflow_enable(tmp_path):

@@ -7,6 +7,9 @@ usage() {
   cat >&2 <<'EOF'
 Usage: run_nemo_gym_mock.sh OUTPUT_DIR
 
+Host requirements:
+  bash, python3, curl, lsof   lsof proves the ready head belongs to this run
+
 Required environment:
   NEMO_GYM_ROOT             Pinned NVIDIA-NeMo/Gym checkout
   NEMO_GYM_MODEL            Served model name returned by /v1/models
@@ -19,9 +22,9 @@ Optional environment:
   NEMO_GYM_BIN              Defaults to $NEMO_GYM_ROOT/.venv/bin/gym
   NEMO_GYM_REPEATS          Defaults to 2; must be at least 2 for profiling
   NEMO_GYM_CONCURRENCY      Defaults to 1
-  NEMO_GYM_HEAD_PORT        Defaults to 11000
+  NEMO_GYM_HEAD_PORT        Defaults to 11000; must be free and owned by this run
   NEMO_GYM_INPUT            Defaults to the staged example.jsonl
-  NEMO_GYM_REQUIRE_SUCCESS  Defaults to 1; set 0 only for a non-success mock task
+  NEMO_GYM_REQUIRE_SUCCESS  Defaults to 1; set 0 for real-model evaluation or alternate tasks
   NEMO_GYM_MLFLOW_ENABLED  Defaults to 0; set 1 for native MLflow metrics/config
   NEMO_GYM_MLFLOW_TRACKING_URI  MLflow tracking URI when enabled; no userinfo/query/fragment
   NEMO_GYM_MLFLOW_EXPERIMENT_NAME  MLflow experiment name when enabled
@@ -166,6 +169,8 @@ MODEL_URL=${NEMO_GYM_MODEL_URL%/}
 OUTPUT_DIR=$1
 GYM_PID=""
 GYM_PGID=""
+ACTIVE_PID=""
+ACTIVE_PGID=""
 
 if [[ ! "$REPEATS" =~ ^[0-9]+$ ]] || (( REPEATS < 2 )); then
   echo "NEMO_GYM_REPEATS must be an integer of at least 2" >&2
@@ -181,6 +186,28 @@ if [[ "$REQUIRE_SUCCESS" != "0" && "$REQUIRE_SUCCESS" != "1" ]]; then
 fi
 if [[ ! "$HEAD_PORT" =~ ^[0-9]+$ ]] || (( HEAD_PORT < 1 || HEAD_PORT > 65535 )); then
   echo "NEMO_GYM_HEAD_PORT must be in [1, 65535]" >&2
+  exit 2
+fi
+if ! command -v lsof >/dev/null 2>&1; then
+  echo "lsof is required to verify NEMO_GYM_HEAD_PORT ownership" >&2
+  exit 2
+fi
+head_port_available() {
+  python3 - "$HEAD_PORT" <<'PY'
+import socket
+import sys
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    sock.bind(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+}
+if ! head_port_available; then
+  echo "NEMO_GYM_HEAD_PORT $HEAD_PORT is already in use" >&2
   exit 2
 fi
 if [[ ! -x "$GYM_BIN" ]]; then
@@ -271,7 +298,7 @@ unset NEMO_GYM_WRAPPER_MODEL_KEY
 terminate_group() {
   local signal=$1
   local pid=$2
-  local pgid="${GYM_PGID:-}"
+  local pgid=${3:-}
   if [[ -z "$pid" ]]; then
     return
   fi
@@ -286,30 +313,110 @@ terminate_group() {
 }
 
 group_alive() {
-  [[ -n "${GYM_PGID:-}" ]] && kill -0 -- "-$GYM_PGID" 2>/dev/null
+  local pgid=${1:-}
+  [[ -n "$pgid" ]] && kill -0 -- "-$pgid" 2>/dev/null
+}
+
+launch_owned_process() {
+  local log_file=$1
+  shift
+  python3 - "$@" >"$log_file" 2>&1 <<'PY' &
+import os
+import sys
+
+try:
+    os.setsid()
+except PermissionError:
+    os.setpgid(0, 0)
+os.execv(sys.argv[1], sys.argv[1:])
+PY
+  ACTIVE_PID=$!
+  ACTIVE_PGID=$ACTIVE_PID
+}
+
+wait_owned_process() {
+  local pid=$ACTIVE_PID
+  local status
+  if wait "$pid"; then
+    status=0
+  else
+    status=$?
+  fi
+  ACTIVE_PID=""
+  ACTIVE_PGID=""
+  return "$status"
+}
+
+assert_head_owned() {
+  if [[ -z "$GYM_PID" ]] || ! kill -0 "$GYM_PID" 2>/dev/null; then
+    echo "Gym launcher exited before the head became ready" >&2
+    return 1
+  fi
+  if ! group_alive "$GYM_PGID"; then
+    echo "Gym launcher process group is not alive after readiness" >&2
+    return 1
+  fi
+  local listener_pids
+  listener_pids=$(lsof -nP -iTCP:"$HEAD_PORT" -sTCP:LISTEN -t 2>/dev/null || true)
+  if [[ -z "$listener_pids" ]]; then
+    echo "No process is listening on NEMO_GYM_HEAD_PORT $HEAD_PORT" >&2
+    return 1
+  fi
+  local listener_pid listener_pgid
+  while IFS= read -r listener_pid; do
+    [[ -n "$listener_pid" ]] || continue
+    listener_pgid=$(ps -o pgid= -p "$listener_pid" 2>/dev/null | tr -d ' ')
+    if [[ -z "$listener_pgid" || "$listener_pgid" != "$GYM_PGID" ]]; then
+      echo "NEMO_GYM_HEAD_PORT $HEAD_PORT is owned by an unexpected process group" >&2
+      return 1
+    fi
+  done <<< "$listener_pids"
 }
 
 cleanup() {
   trap - EXIT INT TERM
-  if [[ -n "$GYM_PID" ]] && { group_alive || kill -0 "$GYM_PID" 2>/dev/null; }; then
-    terminate_group INT "$GYM_PID"
+  if [[ -n "${ACTIVE_PID:-}" ]]; then
+    terminate_group INT "$ACTIVE_PID" "${ACTIVE_PGID:-}"
+    wait "$ACTIVE_PID" 2>/dev/null || true
+    ACTIVE_PID=""
+    ACTIVE_PGID=""
+  fi
+  if [[ -n "$GYM_PID" ]] && { group_alive "$GYM_PGID" || kill -0 "$GYM_PID" 2>/dev/null; }; then
+    terminate_group INT "$GYM_PID" "$GYM_PGID"
     for _ in $(seq 1 30); do
-      if ! group_alive && ! kill -0 "$GYM_PID" 2>/dev/null; then
+      if ! group_alive "$GYM_PGID" && ! kill -0 "$GYM_PID" 2>/dev/null; then
         break
       fi
       sleep 1
     done
-    if group_alive || kill -0 "$GYM_PID" 2>/dev/null; then
-      terminate_group TERM "$GYM_PID"
+    if group_alive "$GYM_PGID" || kill -0 "$GYM_PID" 2>/dev/null; then
+      terminate_group TERM "$GYM_PID" "$GYM_PGID"
       sleep 2
     fi
-    if group_alive || kill -0 "$GYM_PID" 2>/dev/null; then
-      terminate_group KILL "$GYM_PID"
+    if group_alive "$GYM_PGID" || kill -0 "$GYM_PID" 2>/dev/null; then
+      terminate_group KILL "$GYM_PID" "$GYM_PGID"
     fi
     wait "$GYM_PID" 2>/dev/null || true
   fi
 }
-trap cleanup EXIT INT TERM
+
+cancel() {
+  local signal=$1
+  local status=$2
+  trap - EXIT INT TERM
+  if [[ -n "${ACTIVE_PID:-}" ]]; then
+    terminate_group "$signal" "$ACTIVE_PID" "${ACTIVE_PGID:-}"
+    wait "$ACTIVE_PID" 2>/dev/null || true
+    ACTIVE_PID=""
+    ACTIVE_PGID=""
+  fi
+  cleanup
+  exit "$status"
+}
+
+trap cleanup EXIT
+trap 'cancel INT 130' INT
+trap 'cancel TERM 143' TERM
 
 WANDB_OVERRIDES=(
   "++wandb_project=null"
@@ -352,50 +459,48 @@ if [[ "$MODEL_TYPE" == "vllm_model" && "${NEMO_GYM_USES_REASONING_PARSER:-false}
   START_ARGS+=("++policy_model.responses_api_models.vllm_model.uses_reasoning_parser=false")
 fi
 
-python3 - "$GYM_BIN" "${START_ARGS[@]}" >"$OUTPUT_DIR/gym-env-start.log" 2>&1 <<'PY' &
-import os
-import sys
-
-try:
-    os.setsid()
-except PermissionError:
-    os.setpgid(0, 0)
-os.execv(sys.argv[1], sys.argv[1:])
-PY
-GYM_PID=$!
+launch_owned_process "$OUTPUT_DIR/gym-env-start.log" "$GYM_BIN" "${START_ARGS[@]}"
+GYM_PID=$ACTIVE_PID
 # The launcher calls setsid/setpgid before exec, so its PID is the dedicated PGID.
-GYM_PGID=$GYM_PID
-bash "$WAIT_SCRIPT" "$GYM_PID" "$HEAD_PORT" "${NEMO_GYM_READY_TIMEOUT_SECONDS:-240}"
+GYM_PGID=$ACTIVE_PGID
+launch_owned_process "$OUTPUT_DIR/gym-readiness.log" "$WAIT_SCRIPT" "$GYM_PID" "$HEAD_PORT" "${NEMO_GYM_READY_TIMEOUT_SECONDS:-240}"
+wait_owned_process
+if ! assert_head_owned; then
+  exit 2
+fi
 
-(
-  if [[ "$MLFLOW_ENABLED" == "1" && -n "$MLFLOW_TOKEN_ENV" ]]; then
-    export NEMO_GYM_WRAPPER_MLFLOW_TOKEN="$MLFLOW_TOKEN_VALUE"
-  fi
-  "$GYM_BIN" eval run --no-serve \
-    --agent qudgym_agent \
-    --input "$INPUT" \
-    --output "$ROLLOUTS" \
-    --limit 1 \
-    --num-repeats "$REPEATS" \
-    --concurrency "$CONCURRENCY" \
-    --temperature 0 \
-    --top-p 1 \
-    --max-output-tokens 256 \
-    "++head_server.port=$HEAD_PORT" \
-    "++observability_enabled=true" \
-    "++model_call_capture_dir=$CAPTURE_DIR" \
-    "++upload_rollouts=$MLFLOW_UPLOAD_ROLLOUTS" \
-    "${API_KEY_EVAL_ARGS[@]}" \
-    "${EVAL_EXPORTER_OVERRIDES[@]}" \
-    >"$OUTPUT_DIR/gym-eval-run.log" 2>&1
-)
+if [[ "$MLFLOW_ENABLED" == "1" && -n "$MLFLOW_TOKEN_ENV" ]]; then
+  export NEMO_GYM_WRAPPER_MLFLOW_TOKEN="$MLFLOW_TOKEN_VALUE"
+fi
+launch_owned_process "$OUTPUT_DIR/gym-eval-run.log" "$GYM_BIN" eval run --no-serve \
+  --agent qudgym_agent \
+  --input "$INPUT" \
+  --output "$ROLLOUTS" \
+  --limit 1 \
+  --num-repeats "$REPEATS" \
+  --concurrency "$CONCURRENCY" \
+  --temperature 0 \
+  --top-p 1 \
+  --max-output-tokens 256 \
+  "++head_server.port=$HEAD_PORT" \
+  "++observability_enabled=true" \
+  "++model_call_capture_dir=$CAPTURE_DIR" \
+  "++upload_rollouts=$MLFLOW_UPLOAD_ROLLOUTS" \
+  "${API_KEY_EVAL_ARGS[@]}" \
+  "${EVAL_EXPORTER_OVERRIDES[@]}"
+EVAL_STATUS=0
+wait_owned_process || EVAL_STATUS=$?
+unset NEMO_GYM_WRAPPER_MLFLOW_TOKEN
+if (( EVAL_STATUS != 0 )); then
+  exit "$EVAL_STATUS"
+fi
 
-"$GYM_BIN" eval profile \
+launch_owned_process "$OUTPUT_DIR/gym-eval-profile.log" "$GYM_BIN" eval profile \
   --inputs "$MATERIALIZED" \
   --rollouts "$ROLLOUTS" \
   "++upload_rollouts=false" \
-  "${START_EXPORTER_OVERRIDES[@]}" \
-  >"$OUTPUT_DIR/gym-eval-profile.log" 2>&1
+  "${START_EXPORTER_OVERRIDES[@]}"
+wait_owned_process
 
 python3 - "$ROLLOUTS" "$AGGREGATE" "$PROFILE" "$QUALITY" "$SUMMARY" "$REPEATS" "$REQUIRE_SUCCESS" "$MLFLOW_ENABLED" "$MLFLOW_UPLOAD_ROLLOUTS" <<'PY'
 import json

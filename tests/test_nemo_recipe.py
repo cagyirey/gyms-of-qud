@@ -114,6 +114,12 @@ def test_native_wrapper_delegates_to_nemo_gym_without_a_second_policy_loop():
         "reward_profile_completion_pct",
         "NEMO_GYM_MODEL_API_KEY_ENV",
         "NEMO_GYM_WRAPPER_POLICY_KEY",
+        "head_port_available",
+        "assert_head_owned",
+        "launch_owned_process",
+        "wait_owned_process",
+        "cancel INT 130",
+        "cancel TERM 143",
         "umask 077",
     ):
         assert required in text
@@ -124,8 +130,9 @@ def test_native_wrapper_delegates_to_nemo_gym_without_a_second_policy_loop():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "NEMO_GYM_MODEL_TYPE=vllm_model" in workflow
     assert "scripts/run_nemo_gym_mock.sh" in workflow
-    assert "GYM_PGID=$GYM_PID" in text
-    assert 'kill -0 -- "-$GYM_PGID"' in text
+    assert "GYM_PGID=$ACTIVE_PGID" in text
+    assert 'group_alive "$GYM_PGID"' in text
+    assert 'terminate_group' in text
     assert '"++upload_rollouts=$MLFLOW_UPLOAD_ROLLOUTS"' in text
     assert r'"++mlflow_tracking_uri=\${oc.env:NEMO_GYM_WRAPPER_MLFLOW_TRACKING_URI}"' in text
     assert "START_EXPORTER_OVERRIDES" in text
@@ -133,7 +140,9 @@ def test_native_wrapper_delegates_to_nemo_gym_without_a_second_policy_loop():
     assert '"${START_EXPORTER_OVERRIDES[@]}"' in text
     assert 'unset "$MLFLOW_TOKEN_ENV"' in text
     assert 'unset NEMO_GYM_MODEL_API_KEY' in text
-    assert text.index('unset "$MLFLOW_TOKEN_ENV"') < text.index('python3 - "$GYM_BIN" "${START_ARGS[@]}"')
+    assert text.index('unset "$MLFLOW_TOKEN_ENV"') < text.index('launch_owned_process "$OUTPUT_DIR/gym-env-start.log"')
+    assert "trap cleanup EXIT INT TERM" not in text
+    assert "trap cleanup EXIT" in text
     assert '"wandb_disabled": True' in text
     assert '"mlflow_requested": mlflow_requested' in text
     assert '"mlflow_status": "requested_not_verified"' in text
@@ -154,6 +163,35 @@ def test_source_requirements_do_not_embed_machine_paths():
     text = (INTEGRATION / "requirements.txt").read_text(encoding="utf-8")
     assert "file://" not in text
     assert "/Users/" not in text
+
+
+def test_wrapper_proves_head_ownership_before_dispatching_evaluation():
+    text = (ROOT / "scripts/run_nemo_gym_mock.sh").read_text(encoding="utf-8")
+    # The pinned readiness helper only checks the launcher PID while polls fail,
+    # so a foreign head can satisfy it. The wrapper must prove ownership itself.
+    assert '"$listener_pgid" != "$GYM_PGID"' in text
+    assert "Gym launcher exited before the head became ready" in text
+    assert text.index("assert_head_owned") < text.index("gym-eval-run.log")
+    assert "Gym launcher process group is not alive after readiness" in text
+
+
+def test_wrapper_separates_signal_cancellation_from_exit_cleanup():
+    text = (ROOT / "scripts/run_nemo_gym_mock.sh").read_text(encoding="utf-8")
+    assert "trap cleanup EXIT INT TERM" not in text
+    for required in (
+        "trap cleanup EXIT",
+        "trap 'cancel INT 130' INT",
+        "trap 'cancel TERM 143' TERM",
+        'terminate_group "$signal" "$ACTIVE_PID"',
+    ):
+        assert required in text
+    # Every long-running stage is launched into its own group, so a signal
+    # handler can terminate the active stage instead of resuming the workflow.
+    for stage in ("gym-env-start", "gym-readiness", "gym-eval-run", "gym-eval-profile"):
+        assert f'launch_owned_process "$OUTPUT_DIR/{stage}.log"' in text
+    assert text.count("wait_owned_process() {") == 1
+    # Three awaited stages: readiness, evaluation, and profiling.
+    assert text.count("\nwait_owned_process") == 4
 
 
 def test_nemo_adapter_does_not_duplicate_model_or_token_telemetry():
