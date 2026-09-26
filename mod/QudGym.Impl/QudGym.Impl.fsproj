@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <QudManaged Condition="'$(QudManaged)' == ''">$(HOME)/Library/Application Support/Steam/steamapps/common/Caves of Qud/CoQ.app/Contents/Resources/Data/Managed</QudManaged>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>$(MSBuildThisFileDirectory)../QudGym/lib/</OutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Suave" Version="2.6.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Probe.fs" />
+    <Compile Include="Embark.fs" />
+    <Compile Include="Session.fs" />
+    <EmbeddedResource Include="../../loadouts/artifex.json">
+      <LogicalName>artifex.json</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+</Project>
