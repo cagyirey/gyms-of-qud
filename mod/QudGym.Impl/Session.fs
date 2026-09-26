@@ -156,6 +156,9 @@ module Session =
         try asInt (call player name [| box "Hitpoints"; box fallback |])
         with _ -> fallback
 
+    /// Upper bound on reported non-scenery entities per observation.
+    let private MaxEntities = 40
+
     /// Perceived map radius. The 5x5 window this shipped with was too myopic to
     /// navigate on; the radius is a knob so a caller can trade tokens for reach.
     let mutable private radius = 6
@@ -169,9 +172,24 @@ module Session =
         try call cell "IsVisible" [||] :?> bool
         with _ -> true
 
+    /// Objects in a cell that the engine itself does not consider scenery.
+    ///
+    /// Qud already draws this line: Cell.GetRealNonSceneryObjects is the same
+    /// call the game uses to separate terrain and walls from things you can
+    /// interact with. Preferring it keeps the projection aligned with the
+    /// player's own model of the world instead of guessing from names, and keeps
+    /// "dirt path" and "brinestalk wall" out of the entity list, where they were
+    /// duplicating dozens of times per view.
     let private objectsIn (cell: obj) =
-        try call cell "GetObjects" [||] :?> Collections.IEnumerable
-        with _ -> null
+        let tryCall name =
+            try
+                match call cell name [||] with
+                | null -> null
+                | v -> v :?> Collections.IEnumerable
+            with _ -> null
+        match tryCall "GetRealNonSceneryObjects" with
+        | null -> tryCall "GetObjects"
+        | r -> r
 
     /// Read-only entity projection. Only objects the game already considers
     /// visible in a visible cell are reported, and only public presentation
@@ -214,7 +232,9 @@ module Session =
                                     // Public presentation only. The engine's own
                                     // stable handle is deliberately not exported.
                                     let key = sprintf "%s|%d|%d|%s" name dx dy glyphChar
-                                    if seen.Add key then
+                                    // Bounded: a wide window must not be able to
+                                    // flood the decision payload.
+                                    if acc.Count < MaxEntities && seen.Add key then
                                         acc.Add((name, "object", dx, dy, false, glyphChar)) |> ignore
         acc |> Seq.toArray
 
