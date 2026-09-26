@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
-"""Generate a recorded trajectory through the action-space guard.
+"""Record a trajectory through the action-space guard.
 
 Every decision goes through ActionSpace, so an action the model invents is
-rejected at the boundary with the candidate list rather than being sent to the
-game. Each decision is recorded as an LLM call alongside the environment
-transition, which is what makes the resulting ATOF stream usable as training
-data rather than just a log.
+rejected at the boundary with the candidate list and retried, never silently
+substituted. A substitution would make a recorded episode look successful while
+hiding the one fact worth recording, so exhausting the retries is a hard stop
+rather than a fallback.
 
-    scripts/generate_trajectory.py OUT.atof.jsonl [--backend mock|live]
-                                          [--steps N] [--agent NAME]
+    scripts/generate_trajectory.py OUT.jsonl [--backend mock|live] [--steps N]
+                                          [--agent NAME] [--misbehave]
 
-The operating model is stubbed here: the point is to produce and inspect a real
-trajectory with the guard in the loop. Swapping in a model call means replacing
-_decide only.
+--backend mock runs the stub policy offline. --backend live drives the running
+game over its websocket and asks the real model through opencode's generate
+route, reusing one session for the episode so opencode keeps its prompt cache
+and the provider's session routing stays satisfied.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 
@@ -26,7 +28,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from qudgym import QudEnv  # noqa: E402
 from qudgym.guidance import IllegalAction, build_action_space  # noqa: E402
 from qudgym.models import Observation  # noqa: E402
-from qudgym.prompts import build_messages  # noqa: E402
+from qudgym.prompts import SYSTEM, build_messages  # noqa: E402
 from qudgym.recording import RecordingConfig, SessionRecorder  # noqa: E402
 
 CONTROL = pathlib.Path(
@@ -34,89 +36,125 @@ CONTROL = pathlib.Path(
 )
 
 
-def _stub_policy(observation: Observation, misbehave: bool = False) -> tuple[str, str]:
-    """Stand-in for the operating model. Returns (raw_text, reason).
+class StubPolicy:
+    """Stand-in for the operating model, so the pipeline is testable offline.
 
-    Deliberately returns free text rather than a bare id, so the guard is doing
-    real extraction work instead of passing a clean value through.
+    Answers in prose rather than a bare id on purpose, so the guard does real
+    extraction work instead of passing a clean value through.
     """
-    if misbehave:
-        return "move:Z", "stub is inventing an action on purpose"
-    ids = [a.id for a in observation.actions]
-    # At a prompt the only legal actions are answers, so answer first.
-    answer = next((i for i in ids if i.startswith("answer:")), None)
-    if answer is not None and observation.phase != "command":
-        return f"action_id: {answer}", "stub answers a prompt"
-    if "move:E" in ids:
-        return "move:E", "stub prefers east"
-    move = next((i for i in ids if i.startswith("move:")), None)
-    if move:
-        return f"I will go {move[5:]}.", "stub fallback"
-    if "wait" in ids:
-        return "wait", "stub waits"
-    # Whatever is left, said in prose rather than as an id.
-    return f"Let us {ids[0]}.", "stub fallback to the only candidate"
+
+    name = "stub-policy"
+
+    def __init__(self, misbehave: bool = False) -> None:
+        self.misbehave = misbehave
+        self.calls = 0
+
+    def complete(self, system: str, prompt: str) -> str:
+        self.calls += 1
+        if self.misbehave:
+            return "move:Z"
+        ids = _legal_ids(prompt)
+        answer = next((i for i in ids if i.startswith("answer:")), None)
+        if answer:
+            return f"action_id: {answer}"
+        move = next((i for i in ids if i.startswith("move:")), None)
+        if move:
+            return f"action_id: {move}"
+        return f"action_id: {ids[0]}"
 
 
-def _decide(observation: Observation, recorder: SessionRecorder, verbose: bool,
-             misbehave: bool = False) -> str:
-    # The observation comes from the transition the recorder already holds.
-    # env.reconcile() would re-read the backend and clear env.current, which is
-    # exactly the state the recorder needs to accept the next step.
+class OpenCodePolicy:
+    """The real operating model, through opencode's generate route."""
+
+    def __init__(self, model) -> None:
+        self.model = model
+        self.name = f"{model.model_id}"
+
+    @property
+    def calls(self) -> int:
+        return self.model.calls
+
+    def complete(self, system: str, prompt: str) -> str:
+        return self.model.complete(system, prompt)
+
+
+def _legal_ids(prompt: str) -> list[str]:
+    """Recover the offered ids from the rendered prompt, for the stub only."""
+    tail = prompt.rsplit("Legal actions -> ", 1)[-1]
+    out: list[str] = []
+    for group in tail.split(";"):
+        _, _, rest = group.partition(":")
+        for candidate in rest.split(","):
+            token = candidate.strip()
+            if ":" in token:
+                out.append(token)
+    return out
+
+
+def _decide(observation: Observation, recorder: SessionRecorder, policy,
+            verbose: bool, max_attempts: int = 3) -> str:
     space = build_action_space(observation)
-    raw, reason = _stub_policy(observation, misbehave)
-    try:
-        chosen = space.extract(raw)
-    except IllegalAction:
-        # Record the rejection rather than silently substituting a legal move.
+    messages = build_messages(observation, space)
+    system = messages[0]["content"]
+    prompt = messages[1]["content"]
+    for attempt in range(1, max_attempts + 1):
+        raw = policy.complete(system, prompt)
+        chosen: str | None = None
         with recorder.llm_call(
-            model_name="stub-policy",
+            model_name=policy.name,
             provider_name=recorder.config.provider_name,
-            input_messages=build_messages(observation, space),
+            input_messages=[{"role": "system", "content": system},
+                            {"role": "user", "content": prompt}],
         ) as call:
             call.output_text = raw
-            call.finish_reasons = ["rejected"]
-        raise
-    with recorder.llm_call(
-        model_name="stub-policy",
-        provider_name=recorder.config.provider_name,
-        input_messages=build_messages(observation, space),
-    ) as call:
-        call.output_text = chosen
-    if verbose:
-        print(f"  {observation.decision_id} -> {chosen}  ({reason})")
-    return chosen
+            try:
+                chosen = space.extract(raw)
+            except IllegalAction:
+                call.finish_reasons = ["rejected"]
+            else:
+                call.finish_reasons = ["stop"]
+        if chosen is not None:
+            if verbose:
+                print(f"  {observation.decision_id} -> {chosen}  (attempt {attempt})")
+            return chosen
+        if verbose:
+            print(f"  {observation.decision_id} attempt {attempt} REJECTED: {raw[:70]!r}")
+        system, prompt = SYSTEM, space.retry_message(raw)
+    raise SystemExit(
+        f"policy produced no legal action in {max_attempts} attempts; "
+        "the rejections are recorded and no action was substituted"
+    )
 
 
-def _render(observation: Observation, space) -> str:
-    lines = [
-        f"turn {observation.turn}  phase {observation.phase}",
-        f"player hp {observation.player.hp}/{observation.player.max_hp} "
-        f"at ({observation.player.x},{observation.player.y})",
-    ]
-    if observation.entities:
-        lines.append("nearby: " + ", ".join(
-            f"{e.name} at ({e.x},{e.y})" for e in observation.entities[:8]))
-    if observation.messages:
-        lines.append("recent: " + " / ".join(m.strip() for m in observation.messages[-3:]))
-    if observation.prompt:
-        lines.append(f"prompt: {observation.prompt.kind}: {observation.prompt.text}")
-    lines.append("legal actions: " + ", ".join(space.action_ids))
-    return "\n".join(lines)
+def _open_env(args):
+    if args.backend == "mock":
+        from qudgym.mock import MockBackend
 
+        policy = StubPolicy(misbehave=args.misbehave)
+        return QudEnv(MockBackend()), policy
+    if args.control is None:
+        raise SystemExit("--control is required for --backend live")
+    url, token = args.control.read_text(encoding="utf-8").split()
+    from qudgym.live import LiveBackend, OpenCodeModel, discover_opencode_service
 
-def _open_env(backend: str):
-    if backend == "live":
-        from qudgym.client import HttpBackend  # noqa: F401 - documents the mismatch
-
-        raise SystemExit(
-            "The live backend is driven over a websocket with a bearer token, not the "
-            "HTTP HttpBackend. Use scripts/live_step_probe.py for live sessions until "
-            "the client speaks the websocket transport."
-        )
-    from qudgym.mock import MockBackend
-
-    return QudEnv(MockBackend())
+    backend = LiveBackend(url, token=token)
+    # One session per episode, so opencode reuses its prompt cache and the
+    # provider's session routing requirement is met for every call.
+    # The service URL and its local credential are discovered, not configured,
+    # because the port changes on every service start.
+    service_url, auth = discover_opencode_service()
+    model = OpenCodeModel(
+        service_url,
+        auth=auth,
+        session_id=f"qudgym-{os.urandom(6).hex()}",
+        model=args.model,
+        provider=args.provider,
+    )
+    caps = backend.capabilities()
+    if caps.is_mock:
+        raise SystemExit("refusing to record: the backend reports itself as a mock")
+    print(f"live backend: game_build={caps.game_build} is_mock={caps.is_mock}")
+    return QudEnv(backend), OpenCodePolicy(model)
 
 
 def main() -> int:
@@ -124,10 +162,13 @@ def main() -> int:
     parser.add_argument("output", type=pathlib.Path)
     parser.add_argument("--backend", default="mock", choices=("mock", "live"))
     parser.add_argument("--steps", type=int, default=8)
-    parser.add_argument("--agent", default="stub-policy")
-    parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--agent", default=None)
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--misbehave", action="store_true",
                         help="invent an illegal action, to show the guard rejecting it")
+    parser.add_argument("--control", type=pathlib.Path, default=CONTROL)
+    parser.add_argument("--model", default="space-bunny-free")
+    parser.add_argument("--provider", default="opencode-go")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
@@ -135,12 +176,13 @@ def main() -> int:
         print(f"refusing to overwrite {args.output}", file=sys.stderr)
         return 2
 
-    with _open_env(args.backend) as env:
+    env, policy = _open_env(args)
+    with env:
         recorder = SessionRecorder(
             env,
             args.output,
             config=RecordingConfig(
-                agent_name=args.agent,
+                agent_name=args.agent or policy.name,
                 agent_version="0.1.0",
                 provider_name=args.backend,
                 capture_content=True,
@@ -152,8 +194,7 @@ def main() -> int:
             if not args.quiet:
                 print(f"recording {args.output}")
             for _ in range(args.steps):
-                action = _decide(observation, recorder, verbose=not args.quiet,
-                                  misbehave=args.misbehave)
+                action = _decide(observation, recorder, policy, verbose=not args.quiet)
                 transition = recorder.step(action)
                 observation = Observation.model_validate(transition.observation.model_dump())
                 if transition.terminated or transition.truncated:
@@ -161,7 +202,8 @@ def main() -> int:
         finally:
             recorder.close()
 
-    print(f"events: {recorder.event_count}  bytes: {args.output.stat().st_size}")
+    print(f"events: {recorder.event_count}  bytes: {args.output.stat().st_size}"
+          f"  model calls: {policy.calls}")
     return 0
 
 
