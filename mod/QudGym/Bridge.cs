@@ -13,6 +13,7 @@ static class QudGymBridge
     static MethodInfo prepareEarly;
     static MethodInfo boot;
     static MethodInfo describeScreen;
+    static MethodInfo describeParts;
     static MethodInfo allowPopup;
     static MethodInfo listen;
     static MethodInfo supply;
@@ -35,6 +36,7 @@ static class QudGymBridge
             prepareEarly = embarkType.GetMethod("prepareEarly");
             boot = embarkType.GetMethod("boot");
             describeScreen = embarkType.GetMethod("describeScreen");
+            describeParts = embarkType.GetMethod("describeParts");
             allowPopup = embarkType.GetMethod("allowPopup");
             Type session = impl.GetType("QudGym.Session");
             listen = session.GetMethod("listen");
@@ -104,9 +106,23 @@ static class QudGymBridge
 
     // Called on the game thread from Keyboard.IdleWait. Blocks until an agent
     // steps, then queues that command for the turn loop to consume.
+    private static bool partsDumped;
+
     public static bool SupplyCommand()
     {
         Ensure();
+        if (!partsDumped && describeParts != null)
+        {
+            try
+            {
+                partsDumped = true;
+                describeParts.Invoke(null, new object[] { XRL.The.Player });
+            }
+            catch (Exception ex)
+            {
+                Debug.Log("QudGym parts dump failed: " + ex.GetBaseException().Message);
+            }
+        }
         if (supply == null)
             return false;
         try

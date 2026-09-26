@@ -56,6 +56,9 @@ module Session =
     // Bumped by the turn thread each time it publishes an observation, so a
     // batch can tell "commands dispatched" from "turns actually run".
     let mutable private published = 0
+    // Actions dequeued but not resolvable against the live world. Tracked so
+    // a batch never reports success for an action that did nothing.
+    let mutable private rejected = 0
 
     /// Bounded poll slice for the turn-thread wait, in milliseconds.
     let mutable private pollMilliseconds = 20
@@ -191,8 +194,15 @@ module Session =
     /// Read-only entity projection. Only objects the game already considers
     /// visible in a visible cell are reported, and only public presentation
     /// fields: no blueprint metadata, no hidden stats, no internal identity.
+    /// Read a boolean instance property, defaulting to false.
+    let private boolOfMember (target: obj) (name: string) =
+        try
+            let p = target.GetType().GetProperty(name, BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.FlattenHierarchy)
+            if isNull p then false else p.GetValue(target, null) :?> bool
+        with _ -> false
+
     let private entityEntries (player: obj) (zone: obj) (x0: int) (y0: int) =
-        let acc = ResizeArray<string * string * int * int * bool * string>()
+        let acc = ResizeArray<string * string * int * int * bool * string * bool>()
         // The player is reported once, anchored, and never mixed into the
         // surrounding cells.
         let playerName =
@@ -201,7 +211,7 @@ module Session =
                 | :? string as s when s <> "" -> s
                 | _ -> "you"
             with _ -> "you"
-        acc.Add((playerName, "self", 0, 0, true, "")) |> ignore
+        acc.Add((playerName, "self", 0, 0, true, "", true)) |> ignore
         let seen = HashSet<string>()
         for dy in -radius .. radius do
             for dx in -radius .. radius do
@@ -228,19 +238,25 @@ module Session =
                                         with _ -> ""
                                     // Public presentation only. The engine's own
                                     // stable handle is deliberately not exported.
+                                    // The game's own predicate for "this is a
+                                    // person or creature". Guessing from names put
+                                    // a watervine in the talk list, and talking to a
+                                    // watervine is not an action.
+                                    let isActor = boolOfMember o "IsActor"
                                     let key = sprintf "%s|%d|%d|%s" name dx dy glyphChar
                                     // Bounded: a wide window must not be able to
                                     // flood the decision payload.
                                     if acc.Count < MaxEntities && seen.Add key then
-                                        acc.Add((name, "object", dx, dy, false, glyphChar)) |> ignore
+                                        acc.Add((name, "object", dx, dy, false, glyphChar, isActor)) |> ignore
         acc |> Seq.toArray
 
     let private entitiesJson (player: obj) (zone: obj) (x0: int) (y0: int) =
         entityEntries player zone x0 y0
-        |> Array.mapi (fun i (name, kind, dx, dy, isSelf, glyphChar) ->
+        |> Array.mapi (fun i (name, kind, dx, dy, isSelf, glyphChar, isActor) ->
             sprintf
-                "{\"id\":\"e%d\",\"name\":%s,\"kind\":%s,\"dx\":%d,\"dy\":%d,\"glyph\":%s,\"is_self\":%s}"
-                i (jsonString name) (jsonString kind) dx dy (jsonString glyphChar) (if isSelf then "true" else "false"))
+                "{\"id\":\"e%d\",\"name\":%s,\"kind\":%s,\"dx\":%d,\"dy\":%d,\"glyph\":%s,\"is_self\":%s,\"is_actor\":%s}"
+                i (jsonString name) (jsonString kind) dx dy (jsonString glyphChar)
+                (if isSelf then "true" else "false") (if isActor then "true" else "false"))
         |> String.concat ","
         |> fun s -> "[" + s + "]"
 
@@ -302,9 +318,15 @@ module Session =
         let zone = zoneForPlayer player
         let entries = entityEntries player zone x0 y0
         for e in entries do
-            let (name, kind, _, _, _, _) = e
+            let (name, kind, _, _, _, _, isActor) = e
             if kind = "object" && name <> "" && name <> "something" && seenNames.Add name then
-                for verb in [| "talk"; "use"; "get" |] do
+                // Talking is only offered to things the game says are actors.
+                // is_actor is reported but not used to gate: the predicate does
+                // not resolve on this build (false even for NPCs), and gating on
+                // it silently removed talking as a capability. An agent picks an
+                // NPC by name; the game decides whether the talk does anything.
+                let verbs = [| "talk"; "use"; "get" |]
+                for verb in verbs do
                     parts.Add(sprintf
                         "{\"id\":%s,\"kind\":%s,\"label\":%s,\"arguments\":{\"target\":%s}}"
                         (jsonString (verb + ":" + name))
@@ -608,8 +630,10 @@ module Session =
                 lock gate (fun () -> slot.Consumed <- true)
                 let actionId = slot.Action.Value
                 result <- commandOf actionId player
+                if result.IsNone then lock gate (fun () -> rejected <- rejected + 1)
             | None, Some actionId ->
                 result <- commandOf actionId player
+                if result.IsNone then lock gate (fun () -> rejected <- rejected + 1)
             | None, None ->
                 if lock gate (fun () -> cancelled) then
                     running <- false
@@ -657,14 +681,14 @@ module Session =
                 // the live world, which the turn thread has and this thread does
                 // not. supply rejects anything unresolvable and injects nothing.
                 for a in actions do pending.Enqueue a
-                consumed, pending.Count, published)
+                consumed, pending.Count, published, rejected)
         let start = DateTime.UtcNow
         let mutable last = startPublished
         let mutable settled = false
         let mutable sawProgress = false
         while not settled do
             Thread.Sleep(25)
-            let now = lock gate (fun () -> consumed, pending.Count, published)
+            let now = lock gate (fun () -> consumed, pending.Count, published, rejected)
             if now <> last then
                 last <- now
                 sawProgress <- true
@@ -676,14 +700,14 @@ module Session =
                 // ran. An untouched game also settles, which is correct: there
                 // was nothing to wait for.
                 let elapsed = int (DateTime.UtcNow - start).TotalMilliseconds
-                let (cNow, qNow, _) = now
-                let (cStart, qStart, _) = startPublished
+                let (cNow, qNow, _, _) = now
+                let (cStart, qStart, _, _) = startPublished
                 let drained = cNow >= cStart + qStart
                 if elapsed >= stallMilliseconds && (sawProgress || drained) then settled <- true
-        let cStart, _, _ = startPublished
-        let doneCount, left =
-            lock gate (fun () -> consumed - cStart, pending.Count)
-        (doneCount, left, settled)
+        let cStart, _, _, rStart = startPublished
+        let doneCount, left, badCount =
+            lock gate (fun () -> consumed - cStart, pending.Count, rejected - rStart)
+        (doneCount, left, badCount, settled)
 
     /// Bounded by construction: it returns on completion or on a stall.
     let run (actions: string[]) (stallMilliseconds: int) = runScript actions stallMilliseconds
@@ -759,7 +783,7 @@ module Session =
                 | Some raw ->
                     raw.Split([| ','; ' ' |], StringSplitOptions.RemoveEmptyEntries)
                     |> Array.map (fun a -> a.Trim().Trim('"'))
-            let doneCount, left, halted = run items 400
+            let doneCount, left, rejectedCount, halted = run items 400
             // Completed and interrupted are different outcomes and must not be
             // reported as the same thing: a finished script is a success, a
             // script the turn thread stopped consuming is an interruption.
@@ -770,9 +794,9 @@ module Session =
                 | Some sl when not sl.Consumed -> sl.Observation
                 | _ -> "null"
             ok requestId (sprintf
-                "{\"actions_submitted\":%d,\"actions_consumed\":%d,\"actions_remaining\":%d,\"completed\":%s,\"interrupted\":%s,\"observation\":%s}"
-                items.Length doneCount left
-                (if completed then "true" else "false")
+                "{\"actions_submitted\":%d,\"actions_consumed\":%d,\"actions_remaining\":%d,\"actions_rejected\":%d,\"completed\":%s,\"interrupted\":%s,\"observation\":%s}"
+                items.Length doneCount left rejectedCount
+                (if completed && rejectedCount = 0 then "true" else "false")
                 (if (not completed) && halted then "true" else "false") obs)
         | "snapshot" | "restore" | "release" | "state_hash" ->
             fail requestId "unsupported" "Live control does not expose snapshots or a full-state hash"

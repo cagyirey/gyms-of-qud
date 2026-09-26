@@ -135,7 +135,7 @@ internal static class Queries
         ["XRL.Core.XRLCore"] = [],
         ["XRL.World.AI.Pathfinding"] = [],
         ["XRL.World.Parts.Interactable"] = [],
-        ["XRL.World.GameObject"] = ["Move", "Path", "Interact", "Handle", "Want", "Quick", "Adjacent", "CanMove"],
+        ["XRL.World.GameObject"] = ["IsActor", "IsCreature", "IsPlayer", "IsHumanoid", "GetPart", "HasPart"],
                 ["ConsoleLib.Console+TextConsole"] = ["Get", "Row", "Buffer", "Scroll", "Lines"],
         ["XRL.World.GameObject"] = ["CurrentCell", "DisplayName", "Stat", "Visible", "Render",
             "Inventory", "Body", "ActivatedAbilit", "GetPart", "HasPart", "AddPart"],

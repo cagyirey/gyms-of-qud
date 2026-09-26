@@ -262,6 +262,51 @@ module Embark =
             |> String.concat ","
         Probe.record path (sprintf "screen probe: sbhits=[%s] types=[%s]" (String.concat ";" hits) names) |> ignore
 
+    /// Diagnostic: part names for visible entities, so the actor predicate is
+    /// chosen from what objects actually carry rather than guessed from names.
+    let describeParts (player: obj) =
+        if isNull player then ()
+        else
+            let cell = instanceValue "CurrentCell" player
+            if isNull cell then ()
+            else
+                let zone = instanceValue "ParentZone" cell
+                let x0 = intOf (instanceValue "X" cell)
+                let y0 = intOf (instanceValue "Y" cell)
+                let acc = ResizeArray<string>()
+                for dy in -2 .. 2 do
+                    for dx in -2 .. 2 do
+                        let c = try invoke "GetCell" [| box (x0 + dx); box (y0 + dy) |] zone with _ -> null
+                        if not (isNull c) then
+                            let objs = try invoke "GetRealNonSceneryObjects" [||] c with _ -> null
+                            if not (isNull objs) then
+                                for o in (objs :?> Collections.IEnumerable) do
+                                    if not (isNull o) then
+                                        let nm =
+                                            try
+                                                match instanceValue "DisplayName" o with
+                                                | :? string as x -> x
+                                                | _ -> "?"
+                                            with _ -> "?"
+                                        let parts =
+                                            try
+                                                let pp = o.GetType().GetProperty("parts", BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.NonPublic)
+                                                if isNull pp then "?"
+                                                else
+                                                    match pp.GetValue(o, null) with
+                                                    | null -> ""
+                                                    | coll ->
+                                                        (coll :?> Collections.IEnumerable)
+                                                        |> Seq.cast<obj>
+                                                        |> Seq.filter (fun q -> not (isNull q))
+                                                        |> Seq.map (fun q -> q.GetType().Name)
+                                                        |> Seq.distinct
+                                                        |> String.concat ","
+                                            with ex -> "err:" + ex.GetType().Name
+                                        acc.Add(sprintf "%s [%+d,%+d] parts=%s" nm dx dy parts) |> ignore
+                let path = Path.Combine(Path.GetTempPath(), "qudgym-parts.txt")
+                File.WriteAllLines(path, acc |> Seq.truncate 16)
+
     let describeFlags () =
         let read name =
             try
