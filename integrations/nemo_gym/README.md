@@ -135,6 +135,10 @@ accepted. The wrapper resolves the key through an environment-backed NeMo Gym
 override; it does not place the raw value in the Gym command line or Hydra
 override file.
 
+The wrapper requires `bash`, `python3`, `curl`, and `lsof` on the host. `lsof` is
+used to prove that the ready head listener belongs to the process group this run
+launched; the wrapper fails closed if it is unavailable.
+
 The output directory is create-only. The wrapper:
 
 1. verifies the pinned NeMo Gym commit and the committed adapter manifest;
@@ -152,13 +156,19 @@ The output directory is create-only. The wrapper:
    `qudgym_agent`;
 9. writes a compact `summary.json` that references native metrics and
    artifacts;
-10. gracefully interrupts the Gym process group.
+10. verifies the ready head listener belongs to the Gym launcher process group
+    before dispatching evaluation; an occupied or foreign head port is rejected;
+11. handles SIGINT/SIGTERM as cancellation (exit 130/143), interrupts the
+    active readiness/evaluation/profile stage, and cleans up only wrapper-owned
+    processes;
+12. gracefully interrupts the Gym process group on ordinary exit.
 
 Set `NEMO_GYM_ALLOW_COMMIT_DRIFT=1` only after reviewing an intentional NeMo Gym
-API update. Set `NEMO_GYM_REQUIRE_SUCCESS=0` only for a deliberately different
-mock task; the default success/profile assertions are part of this wrapper's
-contract. Set `NEMO_GYM_USES_REASONING_PARSER=true` only when the external
-vLLM server was launched with the matching reasoning parser. The optional
+API update. Set `NEMO_GYM_REQUIRE_SUCCESS=0` for real-model evaluation (where a
+loss or extra valid move is an evaluation result) or for an alternate mock task;
+the default success/profile assertions are part of this wrapper's contract. Set
+`NEMO_GYM_USES_REASONING_PARSER=true` only when the external vLLM server was
+launched with the matching reasoning parser. The optional
 `NEMO_GYM_MODEL_TYPE=openai_model` mode is only for an endpoint that genuinely
 implements the Responses API; it is not a Chat Completions substitute.
 
@@ -172,6 +182,7 @@ The output includes:
   verdicts (the current agent may legitimately report checks as unobserved
   when producer turn/tool evidence is unavailable);
 - `model-calls/` — opt-in `ng_model_call_capture` source records;
+- `gym-readiness.log` — head/child readiness and ownership-check evidence;
 - `summary.json` — mock-label and artifact readback, not a second metric owner;
 - logs and the model `/models` response.
 
