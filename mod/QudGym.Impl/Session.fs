@@ -266,36 +266,53 @@ module Session =
         let wait = "{\"id\":\"wait\",\"kind\":\"wait\",\"label\":\"Wait one turn\",\"arguments\":{}}"
         "[" + String.Join(",", Array.append moves [| wait |]) + "]"
 
-    /// Recent console lines the player has actually seen. The screen buffer is
-    /// the game's own rendered output, so this cannot surface anything the
-    /// player has not perceived.
-    let private messagesJson () =
-        let acc = ResizeArray<string>()
+    /// Text the player has actually seen.
+    ///
+    /// Reads the live console buffer rather than any game-side message store, so
+    /// it cannot surface anything the player has not perceived. "ConsoleLib.
+    /// Console" is a namespace, not a type, and the buffer is handed out by
+    /// TextConsole.CurrentBuffer; ToString renders it, which avoids having to
+    /// decode individual ConsoleChar values.
+    let private currentBuffer () =
         try
-            let ty = Type.GetType("ConsoleLib.Console+ScreenBuffer, Assembly-CSharp")
-            if not (isNull ty) then
-                let prop = ty.GetProperty("Current", BindingFlags.Static ||| BindingFlags.Public)
-                if not (isNull prop) then
-                    match prop.GetValue(null) with
-                    | null -> ()
-                    | buffer ->
-                        let rows = asInt (memberValue buffer "Height")
-                        let cols = asInt (memberValue buffer "Width")
-                        let start = max 0 (rows - 12)
-                        for row in start .. rows - 1 do
-                            let sb = StringBuilder()
-                            for col in 0 .. cols - 1 do
-                                try
-                                    let ch = call buffer "Get" [| box row; box col |]
-                                    match ch with
-                                    | :? char as c -> sb.Append(c) |> ignore
-                                    | _ -> ()
-                                with _ -> ()
-                            let line = sb.ToString().Trim()
-                            if line <> "" then acc.Add line
-        with _ -> ()
-        acc |> Seq.distinct |> Seq.rev |> Seq.truncate 20
-        |> Seq.map jsonString |> String.concat "," |> fun s -> "[" + s + "]"
+            let asm =
+                AppDomain.CurrentDomain.GetAssemblies()
+                |> Array.find (fun a -> a.GetName().Name = "Assembly-CSharp")
+            let t = asm.GetType("ConsoleLib.Console.TextConsole", false)
+            if isNull t then null
+            else
+                let flags = BindingFlags.Static ||| BindingFlags.Public ||| BindingFlags.NonPublic
+                let f = t.GetField("CurrentBuffer", flags)
+                let pr = t.GetProperty("CurrentBuffer", flags)
+                if not (isNull f) then f.GetValue(null)
+                elif not (isNull pr) then pr.GetValue(null, null)
+                else null
+        with _ -> null
+
+    let private messagesJson () =
+        match currentBuffer () with
+        | null -> "[]"
+        | buffer ->
+            try
+                let text = call buffer "ToString" [||] :?> string
+                let lines =
+                    if isNull text then [||]
+                    else
+                        text.Split([| '\r'; '\n' |], StringSplitOptions.RemoveEmptyEntries)
+                        |> Array.map (fun l -> l.Trim())
+                        |> Array.filter (fun l -> l <> "")
+                // The buffer renders the whole screen: map above, message log at
+                // the bottom. Take the trailing rows in order, which is where the
+                // text the player was just shown lives, and skip blank rows.
+                let picked =
+                    lines
+                    |> Array.filter (fun l -> l.Trim().Length > 0)
+                    |> Array.truncate 12
+                    |> Array.rev
+                    |> Array.truncate 12
+                    |> Array.rev
+                "[" + String.concat "," (Array.map jsonString picked) + "]"
+            with _ -> "[]"
 
     let private observation (player: obj) turn index =
         let cell = memberValue player "CurrentCell"

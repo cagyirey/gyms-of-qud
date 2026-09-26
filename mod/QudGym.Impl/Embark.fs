@@ -223,6 +223,45 @@ module Embark =
     /// Reads, live, the two XRLCore flags that look like they gate the mod
     /// new-game flow, plus whether the UI context we hop to is present at all.
     /// Metadata cannot say who sets them, so this observes them instead.
+    /// Reflection-only dump of statics that could hold the live ScreenBuffer.
+    /// Metadata cannot show a static field's value, so this asks at runtime.
+    let private intOf (v: obj) =
+        try Convert.ToInt32(v) with _ -> -1
+
+    let describeScreen (path: string) =
+        // "ConsoleLib.Console" is a namespace, not a type, which is why a direct
+        // GetType on it returns null. Scan the namespace for whatever static
+        // hands out the live ScreenBuffer.
+        let asm = gameAssembly.Value
+        let flags = BindingFlags.Static ||| BindingFlags.Public ||| BindingFlags.NonPublic
+        let hits = ResizeArray<string>()
+        for t in asm.GetTypes() do
+            if t.Namespace = "ConsoleLib.Console" && t.Name <> "ScreenBuffer" then
+                for f in t.GetFields(flags) do
+                    if f.FieldType.Name = "ScreenBuffer" then
+                        let v =
+                            try
+                                match f.GetValue(null) with
+                                | null -> "null"
+                                | o -> sprintf "%dx%d" (intOf (instanceValue "Width" o)) (intOf (instanceValue "Height" o))
+                            with ex -> "err:" + ex.GetType().Name
+                        hits.Add(sprintf "%s.%s=%s" t.Name f.Name v)
+                for pr in t.GetProperties(flags) do
+                    if pr.PropertyType.Name = "ScreenBuffer" then
+                        let v =
+                            try
+                                match pr.GetValue(null, null) with
+                                | null -> "null"
+                                | o -> sprintf "%dx%d" (intOf (instanceValue "Width" o)) (intOf (instanceValue "Height" o))
+                            with ex -> "err:" + ex.GetType().Name
+                        hits.Add(sprintf "%s.%s=%s" t.Name pr.Name v)
+        let names =
+            asm.GetTypes()
+            |> Array.filter (fun t -> t.Namespace = "ConsoleLib.Console")
+            |> Array.map (fun t -> t.Name)
+            |> String.concat ","
+        Probe.record path (sprintf "screen probe: sbhits=[%s] types=[%s]" (String.concat ";" hits) names) |> ignore
+
     let describeFlags () =
         let read name =
             try

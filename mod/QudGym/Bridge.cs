@@ -12,6 +12,7 @@ static class QudGymBridge
     static MethodInfo embark;
     static MethodInfo prepareEarly;
     static MethodInfo boot;
+    static MethodInfo describeScreen;
     static MethodInfo allowPopup;
     static MethodInfo listen;
     static MethodInfo supply;
@@ -33,6 +34,7 @@ static class QudGymBridge
             embark = embarkType.GetMethod("start");
             prepareEarly = embarkType.GetMethod("prepareEarly");
             boot = embarkType.GetMethod("boot");
+            describeScreen = embarkType.GetMethod("describeScreen");
             allowPopup = embarkType.GetMethod("allowPopup");
             Type session = impl.GetType("QudGym.Session");
             listen = session.GetMethod("listen");
@@ -73,6 +75,15 @@ static class QudGymBridge
         {
             Write("control missing");
             return;
+        }
+        try
+        {
+            if (describeScreen != null)
+                describeScreen.Invoke(null, new object[] { Path.Combine(Application.persistentDataPath, "QudGym-diagnostic.txt") });
+        }
+        catch (Exception ex)
+        {
+            Debug.Log("QudGym screen probe failed: " + ex.GetBaseException().Message);
         }
         try
         {
