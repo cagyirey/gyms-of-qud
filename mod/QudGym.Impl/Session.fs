@@ -48,6 +48,14 @@ module Session =
     let mutable private logPath = ""
     let mutable private gameBuild = "unknown"
     let mutable private cancelled = false
+    // Actions enqueued by a batch `run`. The turn thread drains one per
+    // decision boundary, so a client can hand over a whole movement script
+    // and read one state back instead of one round trip per step.
+    let private pending = Queue<string>()
+    let mutable private consumed = 0
+    // Bumped by the turn thread each time it publishes an observation, so a
+    // batch can tell "commands dispatched" from "turns actually run".
+    let mutable private published = 0
 
     /// Bounded poll slice for the turn-thread wait, in milliseconds.
     let mutable private pollMilliseconds = 20
@@ -430,7 +438,8 @@ module Session =
             | Some previous -> previous.Onward.TrySetResult(slot) |> ignore
             | None -> first.TrySetResult(slot) |> ignore
             waiting <- Some slot
-            decisions <- index + 1)
+            decisions <- index + 1
+            published <- published + 1)
         if logPath <> "" then
             Probe.record logPath ("boundary " + id + " turn=" + string turn) |> ignore
         slot
@@ -457,15 +466,29 @@ module Session =
                     match waiting with
                     | Some slot when slot.Action.IsSome && not slot.Consumed -> Some slot
                     | _ -> None)
-            match staged with
-            | Some slot ->
+            let fromQueue =
+                if staged.IsSome then None
+                else
+                    lock gate (fun () ->
+                        if pending.Count > 0 then
+                            let a = pending.Dequeue()
+                            consumed <- consumed + 1
+                            Some a
+                        else None)
+            match staged, fromQueue with
+            | Some slot, _ ->
                 lock gate (fun () -> slot.Consumed <- true)
                 let actionId = slot.Action.Value
                 result <-
                     match commandOf actionId with
                     | Some command -> command
                     | None -> failwith ("rejected action " + actionId)
-            | None ->
+            | None, Some actionId ->
+                result <-
+                    match commandOf actionId with
+                    | Some command -> command
+                    | None -> failwith ("rejected action " + actionId)
+            | None, None ->
                 if lock gate (fun () -> cancelled) then
                     running <- false
                 else
@@ -477,6 +500,8 @@ module Session =
                             | _ -> true)
                     if needsPublish then
                         publish player turn |> ignore
+                    // A queued action still needs an observation published for
+                    // this turn so the client sees where it ended up.
                     // Bounded, cancellable slice. Never a client task.
                     Thread.Sleep(pollMilliseconds)
                     if announced <> turn then
@@ -486,6 +511,50 @@ module Session =
         if result = "" then
             lock gate (fun () -> cancelled <- false)
         result
+
+    /// Enqueue a movement script and wait for the turn thread to drain it.
+    ///
+    /// Returns when the script is exhausted, when an action is rejected, or
+    /// when the turn thread stops consuming -- which is what a dialogue or a
+    /// combat interrupt looks like from here. That stall is reported rather
+    /// than hidden, because "the script did not finish" is exactly the signal a
+    /// caller needs to decide what to do next. A single blocked step is not
+    /// retried and the queue is left intact for a follow-up call.
+    let runScript (actions: string[]) (stallMilliseconds: int) =
+        let startPublished =
+            lock gate (fun () ->
+                for a in actions do
+                    if commandOf a |> Option.isSome then pending.Enqueue a
+                consumed, pending.Count, published)
+        let start = DateTime.UtcNow
+        let mutable last = startPublished
+        let mutable settled = false
+        let mutable sawProgress = false
+        while not settled do
+            Thread.Sleep(25)
+            let now = lock gate (fun () -> consumed, pending.Count, published)
+            if now <> last then
+                last <- now
+                sawProgress <- true
+            else
+                // Settled means: nothing new was published for the whole window.
+                // Requiring an idle window after the last publication is what
+                // makes this a completion signal rather than a dispatch signal;
+                // without it the caller gets a readout from before the commands
+                // ran. An untouched game also settles, which is correct: there
+                // was nothing to wait for.
+                let elapsed = int (DateTime.UtcNow - start).TotalMilliseconds
+                let (cNow, qNow, _) = now
+                let (cStart, qStart, _) = startPublished
+                let drained = cNow >= cStart + qStart
+                if elapsed >= stallMilliseconds && (sawProgress || drained) then settled <- true
+        let cStart, _, _ = startPublished
+        let doneCount, left =
+            lock gate (fun () -> consumed - cStart, pending.Count)
+        (doneCount, left, settled)
+
+    /// Bounded by construction: it returns on completion or on a stall.
+    let run (actions: string[]) (stallMilliseconds: int) = runScript actions stallMilliseconds
 
     let private currentWaiting () =
         lock gate (fun () ->
@@ -547,6 +616,32 @@ module Session =
                                 // the transport thread, not the game turn thread.
                                 let next = current.Onward.Task.GetAwaiter().GetResult()
                                 ok requestId (transition next.Index next.Turn next.Observation)
+        | "run" ->
+            // Batch a movement script and read one state back. The whole script
+            // is the contract: nothing partial is reported as success, and a
+            // stall is surfaced so the caller can tell a dialogue interrupt from
+            // a completed script.
+            let items =
+                match if isNull body then None else findString "actions" body with
+                | None -> [||]
+                | Some raw ->
+                    raw.Split([| ','; ' ' |], StringSplitOptions.RemoveEmptyEntries)
+                    |> Array.map (fun a -> a.Trim().Trim('"'))
+            let doneCount, left, halted = run items 400
+            // Completed and interrupted are different outcomes and must not be
+            // reported as the same thing: a finished script is a success, a
+            // script the turn thread stopped consuming is an interruption.
+            let completed = left = 0 && doneCount = items.Length
+            let slot = lock gate (fun () -> waiting)
+            let obs =
+                match slot with
+                | Some sl when not sl.Consumed -> sl.Observation
+                | _ -> "null"
+            ok requestId (sprintf
+                "{\"actions_submitted\":%d,\"actions_consumed\":%d,\"actions_remaining\":%d,\"completed\":%s,\"interrupted\":%s,\"observation\":%s}"
+                items.Length doneCount left
+                (if completed then "true" else "false")
+                (if (not completed) && halted then "true" else "false") obs)
         | "snapshot" | "restore" | "release" | "state_hash" ->
             fail requestId "unsupported" "Live control does not expose snapshots or a full-state hash"
         | _ -> fail requestId "unsupported" "Unknown operation"
@@ -628,6 +723,7 @@ module Session =
     /// Release the turn thread from a wait. Called only from the transport
     /// thread; never touches game state.
     let cancel () = lock gate (fun () -> cancelled <- true)
+
 
     let setPollMilliseconds (value: int) =
         pollMilliseconds <- max 1 (min 250 value)
