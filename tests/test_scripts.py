@@ -291,3 +291,27 @@ def test_generated_schemas_are_current():
     from qudgym.models import RpcRequest, RpcResponse, Observation, Transition, Capabilities
     for model in (RpcRequest, RpcResponse, Observation, Transition, Capabilities):
         assert json.loads((ROOT / 'schemas' / f'{model.__name__}.schema.json').read_text()) == model.model_json_schema()
+
+
+def test_preset_index_is_current():
+    """The mod reads a generated index, not the library, so it must track it."""
+    from qudgym.eye.cli import preset_index
+
+    index = ROOT / "mod" / "QudGym.Impl" / "presets.index"
+    assert index.read_text(encoding="utf-8") == preset_index(
+        ROOT / "builds" / "library.json", ROOT
+    )
+
+
+def test_every_bootable_preset_starts_somewhere():
+    from qudgym.eye.cli import preset_index
+
+    rows = [line.split("\t") for line in
+            preset_index(ROOT / "builds" / "library.json", ROOT).splitlines()]
+    assert rows
+    for pid, sha, path, location in rows:
+        assert pid and len(sha) == 64, f"{pid}: index row is malformed"
+        assert (ROOT / path).is_file(), f"{pid}: sheet {path} is missing"
+        # A boot with no declared location would silently land somewhere
+        # unreported, which is the failure this index exists to prevent.
+        assert location, f"{pid}: no StartingLocation, so the boot cannot state where it landed"

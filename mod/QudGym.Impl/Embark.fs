@@ -4,6 +4,7 @@ open System
 open System.IO
 open System.Reflection
 open System.Threading
+open System.Text
 open System.Threading.Tasks
 
 // Boots one BuildLibrary sheet without the character-creation UI.
@@ -125,12 +126,103 @@ module Embark =
             | _ -> failwith "ui hop timed out"
         | _ -> failwith "ui synchronization context missing"
 
-    let private loadoutJson () =
+    /// One row of the generated preset index: id, sha256, sheet path, location.
+    type private PresetRow =
+        { Id: string
+          Sha256: string
+          Path: string
+          Location: string }
+
+    let private resourceText (name: string) =
         let asm = Assembly.GetExecutingAssembly()
-        use stream = asm.GetManifestResourceStream("artifex.json")
-        if isNull stream then failwith "embedded artifex.json missing"
+        use stream = asm.GetManifestResourceStream(name)
+        if isNull stream then failwith ("embedded resource missing: " + name)
         use reader = new StreamReader(stream)
         reader.ReadToEnd()
+
+    let private resourceBytes (name: string) =
+        let asm = Assembly.GetExecutingAssembly()
+        use stream = asm.GetManifestResourceStream(name)
+        if isNull stream then failwith ("embedded resource missing: " + name)
+        use memory = new MemoryStream()
+        stream.CopyTo(memory)
+        memory.ToArray()
+
+    let private presetRows () =
+        resourceText "presets.index"
+        |> fun text -> text.Split([| '\r'; '\n' |], StringSplitOptions.RemoveEmptyEntries)
+        |> Array.choose (fun line ->
+            match line.Split('\t') with
+            | [| id; sha; path; location |] ->
+                Some { Id = id.Trim(); Sha256 = sha.Trim(); Path = path.Trim(); Location = location.Trim() }
+            | _ -> None)
+
+    /// The preset is launch configuration, not a per-episode request: the mod
+    /// embarks during boot, long before a client can connect and ask. So it is
+    /// read from the environment or a file beside the diagnostic log, and falls
+    /// back to the first library entry.
+    let private requestedPreset () =
+        let fromEnv =
+            match Environment.GetEnvironmentVariable("QUDGYM_PRESET") with
+            | null -> None
+            | v ->
+                let v = v.Trim()
+                if v = "" then None else Some v
+        let fromFile =
+            if logPath = "" then
+                None
+            else
+                let path = Path.Combine(Path.GetDirectoryName logPath, "QudGym-preset.txt")
+                try
+                    if File.Exists path then
+                        let v = File.ReadAllText(path).Trim()
+                        if v = "" then None else Some v
+                    else None
+                with _ -> None
+        match fromEnv, fromFile with
+        | Some v, _ -> v
+        | _, Some v -> v
+        | _ -> ""
+
+    /// Resolve a library preset to its sheet, refusing anything the library
+    /// does not describe.
+    ///
+    /// The hash is re-checked here, inside the game, because generation already
+    /// checked it. Re-checking is what makes a boot auditable: the sheet that
+    /// becomes a build code is provably the sheet the library vouches for,
+    /// rather than whatever happened to be in the resource at build time.
+    let private loadoutJson () =
+        let rows = presetRows ()
+        if rows.Length = 0 then failwith "preset index is empty"
+        let wanted = requestedPreset ()
+        let row =
+            if wanted = "" then
+                rows.[0]
+            else
+                match rows |> Array.tryFind (fun r -> r.Id = wanted) with
+                | Some r -> r
+                | None ->
+                    let offered = rows |> Array.map (fun r -> r.Id) |> String.concat ", "
+                    failwithf "unknown preset %s; the library offers: %s" wanted offered
+        // The id reaches a resource name, so keep it to a safe charset rather
+        // than trusting whatever the environment or a file contained.
+        if row.Id <> Path.GetFileNameWithoutExtension row.Path then
+            failwith ("preset id does not match its sheet name: " + row.Id)
+        let resourceName = "loadouts/" + Path.GetFileName row.Path
+        let bytes = resourceBytes resourceName
+        use sha = Security.Cryptography.SHA256.Create()
+        let actual = BitConverter.ToString(sha.ComputeHash bytes).Replace("-", "").ToLowerInvariant()
+        if actual <> row.Sha256.ToLowerInvariant() then
+            failwith (
+                sprintf "preset %s hashes %s but the library declares %s"
+                    row.Id
+                    actual
+                    row.Sha256)
+        if logPath <> "" then
+            Probe.record logPath
+                (sprintf "preset %s sha256=%s location=%s" row.Id actual row.Location)
+            |> ignore
+        Encoding.UTF8.GetString bytes
 
     let private prepare code =
         let coreType = ty "XRL.Core.XRLCore"
