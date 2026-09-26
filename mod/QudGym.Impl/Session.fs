@@ -590,6 +590,25 @@ module Session =
                 if isNull p then null else p.GetValue(null, null)
         with _ -> null
 
+    // The player's cell, or Unknown when it cannot be read. A sentinel rather
+    // than an option keeps the arithmetic below free of nested tuple patterns.
+    let private unknownPos = -9999
+
+    let private playerPosition () =
+        try
+            let player = livePlayer ()
+            if isNull player then (unknownPos, unknownPos)
+            else
+                let cell = memberValue player "CurrentCell"
+                if isNull cell then (unknownPos, unknownPos)
+                else
+                    let read name =
+                        match memberValue cell name with
+                        | :? int as v -> v
+                        | _ -> unknownPos
+                    read "X", read "Y"
+        with _ -> (unknownPos, unknownPos)
+
     let private commandOf (action: string) (player: obj) =
         if action = "wait" then Some("CmdWait", box null)
         elif action = "look" then Some("CmdLook", box null)
@@ -824,21 +843,49 @@ module Session =
                 | Some raw ->
                     raw.Split([| ','; ' ' |], StringSplitOptions.RemoveEmptyEntries)
                     |> Array.map (fun a -> a.Trim().Trim('"'))
+            // Consumption is not effect. An action is consumed when the game
+            // accepts the command and turns it, which happens just as well when
+            // the player walks into a wall as when the player crosses a room.
+            // completed therefore says the script ran, not that anything
+            // changed, and a caller reading only that field cannot tell a
+            // blocked move from a real one. Report the player's displacement so
+            // the two are separable.
+            let before = playerPosition ()
             let doneCount, left, rejectedCount, halted = run items 400
+            let after = playerPosition ()
+            let beforeX, beforeY = playerPosition ()
+            let doneCount, left, rejectedCount, halted = run items 400
+            let afterX, afterY = playerPosition ()
+            let known = beforeX <> unknownPos && afterX <> unknownPos
+            let movedX = if known then sprintf "%d" (afterX - beforeX) else "null"
+            let movedY = if known then sprintf "%d" (afterY - beforeY) else "null"
             // Completed and interrupted are different outcomes and must not be
             // reported as the same thing: a finished script is a success, a
             // script the turn thread stopped consuming is an interruption.
-            let completed = left = 0 && doneCount = items.Length
-            let slot = lock gate (fun () -> waiting)
-            let obs =
-                match slot with
-                | Some sl when not sl.Consumed -> sl.Observation
-                | _ -> "null"
-            ok requestId (sprintf
-                "{\"actions_submitted\":%d,\"actions_consumed\":%d,\"actions_remaining\":%d,\"actions_rejected\":%d,\"completed\":%s,\"interrupted\":%s,\"observation\":%s}"
-                items.Length doneCount left rejectedCount
-                (if completed && rejectedCount = 0 then "true" else "false")
-                (if (not completed) && halted then "true" else "false") obs)
+            // An empty script is not a completed script.
+            //
+            // `completed` was `left = 0 && doneCount = items.Length`, which is
+            // trivially true when nothing was ever submitted: 0 = 0. A request
+            // whose `actions` field could not be parsed produced an empty list,
+            // ran nothing, and reported success -- so a live episode moved
+            // nowhere while claiming every step had completed. Require a
+            // non-empty script, and reject a missing or malformed one outright
+            // rather than executing nothing.
+            if items.Length = 0 then
+                fail requestId "no_actions" "run requires a non-empty actions array"
+            else
+                let completed = left = 0 && doneCount = items.Length
+                let slot = lock gate (fun () -> waiting)
+                let obs =
+                    match slot with
+                    | Some sl when not sl.Consumed -> sl.Observation
+                    | _ -> "null"
+                ok requestId (sprintf
+                    "{\"actions_submitted\":%d,\"actions_consumed\":%d,\"actions_remaining\":%d,\"actions_rejected\":%d,\"completed\":%s,\"interrupted\":%s,\"player_dx\":%s,\"player_dy\":%s,\"observation\":%s}"
+                    items.Length doneCount left rejectedCount
+                    (if completed && rejectedCount = 0 then "true" else "false")
+                    (if (not completed) && halted then "true" else "false")
+                    movedX movedY obs)
         | "snapshot" | "restore" | "release" | "state_hash" ->
             fail requestId "unsupported" "Live control does not expose snapshots or a full-state hash"
         | _ -> fail requestId "unsupported" "Unknown operation"

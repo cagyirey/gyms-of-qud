@@ -14,6 +14,7 @@
     <Compile Include="TurnProbe.cs" />
     <Compile Include="PromptProbe.cs" />
     <Compile Include="WorldGenGate.cs" />
+    <Compile Include="PushProbe.cs" />
     <Reference Include="Assembly-CSharp">
       <HintPath>$(QudManaged)/Assembly-CSharp.dll</HintPath>
       <Private>false</Private>

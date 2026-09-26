@@ -233,7 +233,7 @@ class OpenCodeModel:
     """
 
     def __init__(self, base_url: str, *, auth: str, session_id: str, model: str,
-                 provider: str, timeout: float = 120.0):
+                 provider: str, timeout: float = 300.0):
         self.base_url = base_url.rstrip("/")
         self.auth = auth
         self.session_id = session_id
@@ -245,6 +245,18 @@ class OpenCodeModel:
         self._created = False
 
     def _post(self, path: str, body: dict) -> dict:
+        try:
+            return self._post_once(path, body)
+        except (TimeoutError, OSError) as exc:
+            # A slow completion is not a refusal. The game is turn based and
+            # can wait, so this is reported as its own outcome rather than
+            # folded into model_error, which would read as "the model said no".
+            raise QudGymError(
+                "model_timeout",
+                f"opencode did not answer within {self.timeout:.0f}s",
+            ) from exc
+
+    def _post_once(self, path: str, body: dict) -> dict:
         import http.client
 
         parsed = urllib.parse.urlsplit(self.base_url)

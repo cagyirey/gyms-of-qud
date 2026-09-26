@@ -315,3 +315,24 @@ def test_every_bootable_preset_starts_somewhere():
         # A boot with no declared location would silently land somewhere
         # unreported, which is the failure this index exists to prevent.
         assert location, f"{pid}: no StartingLocation, so the boot cannot state where it landed"
+
+
+def test_every_module_in_the_package_imports():
+    """A module nothing imports can rot unnoticed.
+
+    live.py sat syntactically broken through a green run because only
+    scripts/generate_trajectory.py imports it, and no test did. Importing every
+    module makes that failure loud without asserting anything about behaviour.
+    """
+    import importlib
+    import pkgutil
+
+    import qudgym
+
+    failures = []
+    for info in pkgutil.walk_packages(qudgym.__path__, prefix="qudgym."):
+        try:
+            importlib.import_module(info.name)
+        except Exception as exc:  # noqa: BLE001 - report, do not mask
+            failures.append(f"{info.name}: {type(exc).__name__}: {exc}")
+    assert not failures, "\n".join(failures)
