@@ -56,9 +56,12 @@ class SessionManager:
     def step(self, key, *, action_id, decision_id):
         with self._lock:
             env = self._get(key)
-            result = env.backend.step(action_id, decision_id=decision_id)
-            env.current = result
-            return result
+            current = env.current
+            if current is None:
+                raise QudGymError("reset_required", "Reset before stepping")
+            if current.observation.decision_id != decision_id:
+                raise QudGymError("stale_decision", "Decision cursor is stale")
+            return env.step(action_id)
 
     def verify(self, key):
         with self._lock:

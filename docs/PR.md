@@ -11,6 +11,6 @@
 
 ## Validation and limitations
 
-See docs/VALIDATION.md for executed checks. The core/reference HTTP path has local test evidence. NeMo runtime integration and C# compilation have not been executed in this environment. There is no loadable/live Qud mod yet, and deterministic snapshot claims apply only to the mock.
+See docs/VALIDATION.md for executed checks. The core/reference HTTP path, C# BridgeCore smoke, and a deterministic native NeMo Gym contract smoke have local evidence. Real local-model inference, Platform/Studio mutation, and a loadable/live Qud mod remain unexecuted; deterministic snapshot claims apply only to the mock.
 
 Game binaries/assets/saves are not included. No model is trained and no GPU is required for the mock tests. Follow-up live integration requires the exact installed Qud build and an isolated test profile.

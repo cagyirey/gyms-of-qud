@@ -24,4 +24,6 @@ Inventory RNG and scheduler/world state. Add opaque, bounded snapshot handles an
 
 ## 6. Validate the native NeMo rollout path
 
-Stage the adapter in the pinned NeMo Gym checkout, run scripted and model-driven mock episodes, validate cleanup and error reporting, and record an actual rollout artifact. Replace the mock session factory with live worker leases only once 1–4 pass. Keep inference/training framework adapters thin. Pointer-head training and policy-guided search follow valid trajectories and snapshot evidence, not the reverse.
+Use the pinned NeMo Gym checkout and its official `gym env start`, `gym eval run --no-serve`, and `gym eval profile` lifecycle. Gates, in order: typed task/config validation; native resource/agent/model startup; a deterministic five-decision success contract; a small local quantized-model rollout; session cleanup and invalid-action/horizon/infrastructure-error checks; and inspection of native model-call/trajectory evidence. Replace the mock session factory with live worker leases only after 1–5 and the mock gates pass.
+
+Keep inference/training adapters thin. Do not build a second rollout loop or token counter. Native Gym-to-ATIF export and NeMo Platform/Studio Intake remain blocked until `gymnasium_agent` can produce complete trajectory evidence for later environment-observation turns; never fabricate that evidence. Pointer-head training and policy-guided search follow valid trajectories and snapshot evidence, not the reverse.

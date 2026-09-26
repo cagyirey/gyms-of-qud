@@ -1,14 +1,16 @@
 """NeMo Gym native GymnasiumServer adapter; mock backend only in this first slice.
 
 Reviewed against NVIDIA-NeMo/Gym commit
-1c8261080bdc881b3e9b7f870e6418f160516991. Not runtime-tested without NeMo.
-Place this directory at resources_servers/qudgym in a pinned NeMo Gym checkout,
-with the qudgym package installed in that resource server's environment.
+1c8261080bdc881b3e9b7f870e6418f160516991 and runtime-smoked through the native
+Gym resource/agent/model servers with a deterministic Responses API fixture.
+Place this directory at resources_servers/qudgym in that pinned checkout; the
+staging helper installs both local projects into the isolated server environment.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections import OrderedDict
 from collections.abc import Mapping
 from copy import deepcopy
@@ -81,7 +83,10 @@ class CachedFault(TypedDict):
 
 
 class QudGymConfig(BaseResourcesServerConfig):
-    pass
+    # Session and replay state are process-local; multiple uvicorn workers are unsafe.
+    num_workers: int = Field(default=1, ge=1, le=1, strict=True)
+    closed_step_cache_max_sessions: int = Field(default=256, ge=1, le=10000, strict=True)
+    closed_step_cache_ttl_seconds: float = Field(default=300.0, gt=0, le=86400, strict=True)
 
 
 class ActionSelection(Model):
@@ -93,6 +98,18 @@ class SeedSpec(Model):
     representation: Representation = "native"
     seed: int = Field(default=0, ge=0, le=2**32-1, strict=True)
     max_decisions: int = Field(default=128, ge=1, le=10000, strict=True)
+
+
+def _seed_spec(metadata: Mapping[str, object]) -> SeedSpec:
+    values = {
+        'representation': metadata.get('representation', 'native'),
+        'seed': metadata.get('seed', 0),
+        'max_decisions': metadata.get('max_decisions', 128),
+    }
+    try:
+        return SeedSpec.model_validate(values)
+    except ValidationError as exc:
+        raise HTTPException(422, 'invalid QudGym task data') from exc
 
 
 class Empty(Model):
@@ -116,9 +133,11 @@ def _reset_identity(metadata: Mapping[str, object], *, seed: int, max_decisions:
 class QudGymServer(GymnasiumServer):
     config: QudGymConfig
     _sessions: SessionManager = PrivateAttr(default_factory=SessionManager)
-    # Keyed by the NeMo session cookie. Kept after close_session: the base
-    # endpoint closes a terminal step before the client may have read the reply.
+    # Keyed by the NeMo session cookie. Kept briefly after close_session: the
+    # base endpoint closes a terminal step before the client may have read the
+    # reply. Closed-session entries are globally bounded by config and TTL.
     _step_cache: dict[str, OrderedDict[str, CachedStep]] = PrivateAttr(default_factory=dict)
+    _closed_step_cache: OrderedDict[str, float] = PrivateAttr(default_factory=OrderedDict)
     _step_faults: dict[str, CachedFault] = PrivateAttr(default_factory=dict)
     _reset_cache: dict[str, tuple[str, ResetPayload]] = PrivateAttr(default_factory=dict)
 
@@ -130,14 +149,38 @@ class QudGymServer(GymnasiumServer):
     def _state(self, session_id: str) -> SessionState:
         return cast(SessionState, self.session_state[session_id])
 
+    def _forget_step_cache(self, session_id: str) -> None:
+        self._step_cache.pop(session_id, None)
+        self._closed_step_cache.pop(session_id, None)
+        self._step_faults.pop(session_id, None)
+
+    def _prune_closed_step_caches(self) -> None:
+        now = time.monotonic()
+        ttl = self.config.closed_step_cache_ttl_seconds
+        while self._closed_step_cache:
+            session_id, touched = next(iter(self._closed_step_cache.items()))
+            if now - touched <= ttl:
+                break
+            self._forget_step_cache(session_id)
+        while len(self._closed_step_cache) > self.config.closed_step_cache_max_sessions:
+            session_id, _ = self._closed_step_cache.popitem(last=False)
+            self._step_cache.pop(session_id, None)
+            self._step_faults.pop(session_id, None)
+
+    def _mark_closed_step_cache(self, session_id: str) -> None:
+        if session_id in self._step_cache:
+            self._closed_step_cache[session_id] = time.monotonic()
+            self._closed_step_cache.move_to_end(session_id)
+            self._prune_closed_step_caches()
+
     def _prune(self) -> None:
+        self._prune_closed_step_caches()
         active = self._sessions.active_keys()
         for key in list(self.session_state):
             state = self._state(key)
             if state['internal'] not in active:
                 self.session_state.pop(key, None)
-                self._step_cache.pop(key, None)
-                self._step_faults.pop(key, None)
+                self._forget_step_cache(key)
 
     @staticmethod
     def _action_fingerprint(action: NeMoGymResponse) -> str:
@@ -158,6 +201,7 @@ class QudGymServer(GymnasiumServer):
                      fingerprint: str | None) -> StepReply | None:
         if session_id is None or request_id is None:
             return None
+        self._prune_closed_step_caches()
         fault = self._step_faults.get(session_id)
         if fault is not None:
             if fault['request_id'] != request_id:
@@ -173,6 +217,9 @@ class QudGymServer(GymnasiumServer):
             return None
         if cached['fingerprint'] != fingerprint:
             raise HTTPException(409, 'Step request id reused with different action')
+        if session_id in self._closed_step_cache:
+            self._closed_step_cache[session_id] = time.monotonic()
+            self._closed_step_cache.move_to_end(session_id)
         payload = cached['payload']
         return (payload['observation'], payload['reward'], payload['terminated'],
                 payload['truncated'], deepcopy(payload['info']))
@@ -205,8 +252,7 @@ class QudGymServer(GymnasiumServer):
         if not session_id:
             raise HTTPException(400, 'NeMo session middleware did not provide a session ID')
         self._prune()
-        spec = SeedSpec(seed=metadata.get('seed', 0), max_decisions=metadata.get('max_decisions', 128),
-                        representation=cast(Representation, metadata.get('representation', 'native')))
+        spec = _seed_spec(metadata)
         key = _reset_identity(metadata, seed=spec.seed, max_decisions=spec.max_decisions,
                               representation=spec.representation)
         if key is not None:
@@ -223,6 +269,7 @@ class QudGymServer(GymnasiumServer):
                         moved = self._step_cache.pop(old_session, None)
                         if moved is not None:
                             self._step_cache[session_id] = moved
+                        self._closed_step_cache.pop(old_session, None)
                         moved_fault = self._step_faults.pop(old_session, None)
                         if moved_fault is not None:
                             self._step_faults[session_id] = moved_fault
@@ -230,8 +277,7 @@ class QudGymServer(GymnasiumServer):
                     observation, info = payload
                     return observation, deepcopy(info)
                 self._reset_cache.pop(key, None)
-        self._step_cache.pop(session_id, None)
-        self._step_faults.pop(session_id, None)
+        self._forget_step_cache(session_id)
         await self.close_session(session_id)
         internal: str | None = None
         try:
@@ -348,6 +394,9 @@ class QudGymServer(GymnasiumServer):
         return self._return_step(session_id, request_id, fingerprint, payload)
 
     async def close_session(self, session_id: str | None):
+        if session_id is not None:
+            self._prune_closed_step_caches()
+            self._mark_closed_step_cache(session_id)
         state = self.session_state.pop(session_id, None)
         self._step_faults.pop(session_id, None)
         if state:

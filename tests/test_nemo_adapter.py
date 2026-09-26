@@ -5,17 +5,22 @@ import json
 import sys
 import types
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from qudgym.mock import MockBackend
 
 ROOT = Path(__file__).resolve().parents[1]
+_NEMO_STUBBED = False
 
 
 def _install_nemo_stubs():
+    global _NEMO_STUBBED
     if 'resources_servers.gymnasium.base' in sys.modules and hasattr(sys.modules['resources_servers.gymnasium.base'], 'extract_text'):
-        return
+        return _NEMO_STUBBED
 
     nemo = types.ModuleType('nemo_gym')
     base_resources = types.ModuleType('nemo_gym.base_resources_server')
@@ -71,6 +76,8 @@ def _install_nemo_stubs():
         'resources_servers.gymnasium': gymnasium_pkg,
         'resources_servers.gymnasium.base': gymnasium_base,
     })
+    _NEMO_STUBBED = True
+    return True
 
 
 def _load_app():
@@ -102,13 +109,31 @@ class _Action:
         self.output = [_Message(text)]
 
 
-def _server():
+def _server(**config):
     app = _load_app()
-    return app.QudGymServer(config=app.QudGymConfig())
+    if _install_nemo_stubs():
+        return app.QudGymServer(config=app.QudGymConfig(**config))
+    from nemo_gym.server_utils import ServerClient
+    values = {
+        'host': '127.0.0.1',
+        'port': 0,
+        'entrypoint': 'app.py',
+        'name': 'qudgym-test',
+        **config,
+    }
+    return app.QudGymServer(
+        config=app.QudGymConfig(**values),
+        server_client=MagicMock(spec=ServerClient),
+    )
 
 
 def _action(action_id, decision_id):
     return _Action(json.dumps({'action_id': action_id, 'decision_id': decision_id}))
+
+
+def test_multiple_server_workers_are_rejected():
+    with pytest.raises(ValidationError):
+        _server(num_workers=2)
 
 
 def test_retried_step_returns_the_committed_transition_once():
@@ -146,6 +171,67 @@ def test_terminal_step_replay_survives_session_close():
         replay = await server.step(action, metadata, 'cookie-1')
         assert replay[1:] == first[1:]
         assert json.loads(replay[0])['turn'] == 1
+
+    asyncio.run(scenario())
+
+
+def test_closed_step_cache_is_globally_bounded_and_expires(monkeypatch):
+    async def scenario():
+        app = _load_app()
+        clock = [1.0]
+        monkeypatch.setattr(app.time, 'monotonic', lambda: clock[0])
+        server = _server(closed_step_cache_max_sessions=2, closed_step_cache_ttl_seconds=5)
+        for index in range(4):
+            session_id = f'cookie-{index}'
+            metadata = {'seed': 7, 'max_decisions': 1, '_ng_task_index': index}
+            observation, _info = await server.reset(metadata, session_id)
+            decision_id = json.loads(observation)['decision_id']
+            await server.step(
+                _action('wait', decision_id),
+                {'_ng_step_request_id': f'step-{index}'},
+                session_id,
+            )
+            await server.close_session(session_id)
+        assert len(server._step_cache) == 2
+        assert len(server._closed_step_cache) == 2
+        clock[0] = 10.0
+        server._prune_closed_step_caches()
+        assert not server._step_cache
+        assert not server._closed_step_cache
+
+    asyncio.run(scenario())
+
+
+def test_model_visible_native_and_agent_eye_views_exclude_backend_sentinel(monkeypatch):
+    sentinel = "backend-only-sentinel-must-not-render"
+
+    class SentinelBackend(MockBackend):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.hidden_sentinel = sentinel
+            self._rng.seed(sentinel)
+
+    import qudgym.sessions as sessions_module
+    monkeypatch.setattr(sessions_module, "MockBackend", SentinelBackend)
+
+    async def scenario():
+        for index, representation in enumerate(("native", "agent-eye-v1")):
+            server = _server()
+            observation, _info = await server.reset(
+                {"representation": representation, "seed": 7, "max_decisions": 16},
+                f"privacy-{index}",
+            )
+            rendered = [observation]
+            for step, action in enumerate(("move:E", "move:E", "answer:open", "move:E", "move:E"), 1):
+                current = server._sessions.observe(server._state(f"privacy-{index}")["internal"])
+                result = await server.step(
+                    _action(action, current.decision_id),
+                    {"_ng_step_request_id": f"privacy-{index}-{step}"},
+                    f"privacy-{index}",
+                )
+                observation = result[0]
+                rendered.append(observation)
+            assert all(sentinel not in text for text in rendered)
 
     asyncio.run(scenario())
 
@@ -262,5 +348,46 @@ def test_lost_reset_rebinds_one_session_to_the_retried_cookie():
         other, _info = await server.reset({**meta, '_ng_rollout_index': 9}, 'cookie-other')
         assert json.loads(other)['episode_id'] != json.loads(first)['episode_id']
         assert len(server._sessions.active_keys()) == 2
+
+    asyncio.run(scenario())
+
+
+def test_invalid_task_fields_are_rejected_before_session_creation():
+    async def scenario():
+        server = _server()
+        with pytest.raises(HTTPException) as exc:
+            await server.reset({'seed': -1, 'max_decisions': 8}, 'cookie-invalid')
+        assert exc.value.status_code == 422
+        assert len(server._sessions.active_keys()) == 0
+
+    asyncio.run(scenario())
+
+
+def test_scripted_native_actions_reach_mock_success():
+    async def scenario():
+        server = _server()
+        observation, info = await server.reset(
+            {'seed': 7, 'max_decisions': 16, '_ng_task_index': 0, '_ng_rollout_index': 0},
+            'cookie-success',
+        )
+        assert info['is_mock'] is True
+        result = None
+        for index, action in enumerate(('move:E', 'move:E', 'answer:open', 'move:E', 'move:E'), 1):
+            decision_id = json.loads(observation)['decision_id']
+            result = await server.step(
+                _action(action, decision_id),
+                {'_ng_step_request_id': f'success-{index}'},
+                'cookie-success',
+            )
+            observation, reward, terminated, truncated, step_info = result
+            if terminated or truncated:
+                break
+        assert reward == 1.0
+        assert terminated is True
+        assert truncated is False
+        assert step_info['outcome'] == 'success'
+        assert step_info['turns_elapsed'] == 4
+        assert step_info['decisions_elapsed'] == 5
+        assert step_info['is_mock'] is True
 
     asyncio.run(scenario())

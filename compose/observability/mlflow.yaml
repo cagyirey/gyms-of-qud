@@ -1,0 +1,54 @@
+# Local MLflow tracking service for native NeMo Gym runs.
+#
+# This is deliberately an opt-in auxiliary service. It is not started by the
+# normal mock lifecycle, and the wrapper still keeps rollout upload disabled by
+# default. The image is MLflow v3.16.0 pinned by multi-architecture digest.
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow@sha256:470607da2a70fa38724d3d7db0a54a78b50fac708f7291bfebe1935fa95259ae
+    profiles:
+      - tracking
+    command:
+      - mlflow
+      - server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --backend-store-uri
+      - sqlite:////mlflow/mlflow.db
+      - --artifacts-destination
+      - /mlflow/artifacts
+      - --serve-artifacts
+      - --allowed-hosts
+      - localhost,127.0.0.1,mlflow
+    ports:
+      - "127.0.0.1:${QUDGYM_MLFLOW_PORT:-5001}:8080"
+    volumes:
+      - mlflow-data:/mlflow
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "3"
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_interval: 10s
+      start_period: 30s
+
+volumes:
+  mlflow-data:

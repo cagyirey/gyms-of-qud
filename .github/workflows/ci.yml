@@ -2,12 +2,19 @@ name: foundation
 on:
   pull_request:
   push:
-    branches: [main, feat/qudgym-foundation]
+    branches: [main]
 permissions:
   contents: read
+# One in-flight run per PR (grouped by PR number) and per branch (by ref), so a
+# newer push cancels its superseded run instead of queueing another full pass.
+# A PR run and the main run land in different groups and never cancel each other.
+concurrency:
+  group: foundation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   python:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         python: ['3.11', '3.12', '3.13']
@@ -16,6 +23,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - run: python -m pip install -e '.[dev]'
       - run: python -m pytest -q
       - run: qudgym smoke
@@ -24,11 +33,243 @@ jobs:
       - run: qudgym schema --output /tmp/qudgym-ci-schemas
       - run: python examples/branch_and_replay.py
       - run: python -m compileall -q src scripts integrations
+      - name: Validate auxiliary Compose profile
+        run: docker compose -f compose.yaml --profile tracking config --quiet
       - run: qudgym eye-demo --preset listener --output /tmp/eye-demo.jsonl --html /tmp/eye-demo.html
       - run: qudgym eye-schema --output /tmp/eye-schemas
       - run: qudgym eye-builds builds/library.json
+  nemo-gym-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: NVIDIA-NeMo/Gym
+          ref: 1c8261080bdc881b3e9b7f870e6418f160516991
+          path: nemo-gym
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.14'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.11'
+          enable-cache: true
+          cache-dependency-glob: nemo-gym/uv.lock
+      - name: Install pinned NeMo Gym
+        working-directory: nemo-gym
+        run: uv sync --extra dev
+      - name: Install QudGym into the NeMo Gym environment
+        run: uv pip install --python nemo-gym/.venv/bin/python -e .
+      - name: Stage and validate the native environment
+        run: |
+          python scripts/stage_nemo_adapter.py "$GITHUB_WORKSPACE/nemo-gym"
+          nemo-gym/.venv/bin/gym env validate \
+            --resources-server qudgym \
+            --model-type vllm_model \
+            --model contract-smoke \
+            --model-url http://127.0.0.1:65535/v1 \
+            --model-api-key dummy
+      - name: Exercise the installed NeMo Gym contracts
+        env:
+          PYTHONPATH: ${{ github.workspace }}/nemo-gym
+        run: nemo-gym/.venv/bin/python -m pytest -q tests/test_nemo_actual.py
+      - name: Run the native lifecycle contract smoke
+        run: |
+          set -euo pipefail
+          MODEL_PID=""
+          MLFLOW_MODEL_PID=""
+          cleanup() {
+            for pid in "$MODEL_PID" "$MLFLOW_MODEL_PID"; do
+              if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                kill -TERM "$pid" 2>/dev/null || true
+                wait "$pid" 2>/dev/null || true
+              fi
+            done
+          }
+          trap cleanup EXIT
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          nemo-gym/.venv/bin/uvicorn \
+            --app-dir "$GITHUB_WORKSPACE" \
+            tests.fixtures.nemo_gym_scripted_model:app \
+            --host 127.0.0.1 --port 18081 >"$RUNNER_TEMP/qudgym-model.log" 2>&1 &
+          MODEL_PID=$!
+          for _ in $(seq 1 50); do
+            if curl -sf http://127.0.0.1:18081/health >/dev/null; then break; fi
+            sleep 0.2
+          done
+          curl -sf http://127.0.0.1:18081/health >/dev/null
+          rm -rf "$RUNNER_TEMP/qudgym-native-contract"
+          NEMO_GYM_ROOT="$GITHUB_WORKSPACE/nemo-gym" \
+          NEMO_GYM_MODEL=qudgym-scripted-smoke \
+          NEMO_GYM_MODEL_URL=http://127.0.0.1:18081/v1 \
+          NEMO_GYM_MODEL_API_KEY=dummy \
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          NEMO_GYM_MODEL_TYPE=vllm_model \
+          NEMO_GYM_REPEATS=2 \
+          NEMO_GYM_CONCURRENCY=1 \
+          NEMO_GYM_HEAD_PORT=18080 \
+          scripts/run_nemo_gym_mock.sh "$RUNNER_TEMP/qudgym-native-contract"
+          test -f "$RUNNER_TEMP/qudgym-native-contract/summary.json"
+      - name: Run the native MLflow opt-in contract smoke
+        run: |
+          set -euo pipefail
+          MLFLOW_MODEL_PID=""
+          cleanup_mlflow() {
+            if [[ -n "$MLFLOW_MODEL_PID" ]] && kill -0 "$MLFLOW_MODEL_PID" 2>/dev/null; then
+              kill -TERM "$MLFLOW_MODEL_PID" 2>/dev/null || true
+              wait "$MLFLOW_MODEL_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_mlflow EXIT
+          rm -rf "$RUNNER_TEMP/qudgym-native-mlflow" "$RUNNER_TEMP/qudgym-native-mlflow-store"
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          nemo-gym/.venv/bin/uvicorn \
+            --app-dir "$GITHUB_WORKSPACE" \
+            tests.fixtures.nemo_gym_scripted_model:app \
+            --host 127.0.0.1 --port 18083 >"$RUNNER_TEMP/qudgym-mlflow-model.log" 2>&1 &
+          MLFLOW_MODEL_PID=$!
+          for _ in $(seq 1 50); do
+            if curl -sf http://127.0.0.1:18083/health >/dev/null; then break; fi
+            sleep 0.2
+          done
+          curl -sf http://127.0.0.1:18083/health >/dev/null
+          MLFLOW_ALLOW_FILE_STORE=true \
+          NEMO_GYM_ROOT="$GITHUB_WORKSPACE/nemo-gym" \
+          NEMO_GYM_MODEL=qudgym-scripted-smoke \
+          NEMO_GYM_MODEL_URL=http://127.0.0.1:18083/v1 \
+          NEMO_GYM_MODEL_API_KEY=dummy \
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          NEMO_GYM_MODEL_TYPE=vllm_model \
+          NEMO_GYM_REPEATS=2 \
+          NEMO_GYM_CONCURRENCY=1 \
+          NEMO_GYM_HEAD_PORT=18082 \
+          NEMO_GYM_MLFLOW_ENABLED=1 \
+          NEMO_GYM_MLFLOW_TRACKING_URI="file://$RUNNER_TEMP/qudgym-native-mlflow-store" \
+          NEMO_GYM_MLFLOW_EXPERIMENT_NAME=ci-native-mlflow \
+          NEMO_GYM_MLFLOW_RUN_NAME=ci-native-mlflow \
+          NEMO_GYM_MLFLOW_UPLOAD_ROLLOUTS=0 \
+          scripts/run_nemo_gym_mock.sh "$RUNNER_TEMP/qudgym-native-mlflow"
+          # Inspect the pinned file store directly; artifact listing through the
+          # client can select a remote repository for a file-backed run.
+          nemo-gym/.venv/bin/python - "$RUNNER_TEMP/qudgym-native-mlflow/summary.json" "$RUNNER_TEMP/qudgym-native-mlflow-store" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          summary = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert summary["mlflow_requested"] is True
+          assert summary["mlflow_status"] == "requested_not_verified"
+          assert summary["mlflow_upload_rollouts_requested"] is False
+          store = pathlib.Path(sys.argv[2])
+          run_meta = [path for path in store.rglob("meta.yaml") if "run_id:" in path.read_text(encoding="utf-8")]
+          assert len(run_meta) == 1
+          assert "status: 3" in run_meta[0].read_text(encoding="utf-8")
+          assert len(list(store.rglob("global_config.json"))) == 1
+          assert not list(store.rglob("rollouts.json"))
+          PY
+      - name: Exercise lifecycle cancellation paths
+        run: |
+          set -euo pipefail
+          # The wrapper proves head-port ownership with lsof; provision it rather
+          # than depending on the runner image happening to ship it.
+          if ! command -v lsof >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq lsof
+          fi
+          command -v lsof
+          CANCEL_MODEL_PID=""
+          CANCEL_WRAPPER_PIDS=()
+          cleanup_cancel() {
+            local pid
+            for pid in "${CANCEL_WRAPPER_PIDS[@]:-}"; do
+              if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                kill -KILL "$pid" 2>/dev/null || true
+                wait "$pid" 2>/dev/null || true
+              fi
+            done
+            if [[ -n "$CANCEL_MODEL_PID" ]] && kill -0 "$CANCEL_MODEL_PID" 2>/dev/null; then
+              kill -TERM "$CANCEL_MODEL_PID" 2>/dev/null || true
+              wait "$CANCEL_MODEL_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_cancel EXIT
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          NEMO_GYM_SCRIPTED_MODEL_DELAY=5 \
+          nemo-gym/.venv/bin/uvicorn \
+            --app-dir "$GITHUB_WORKSPACE" \
+            tests.fixtures.nemo_gym_scripted_model:app \
+            --host 127.0.0.1 --port 18084 >"$RUNNER_TEMP/qudgym-cancel-model.log" 2>&1 &
+          CANCEL_MODEL_PID=$!
+          for _ in $(seq 1 50); do
+            if curl -sf http://127.0.0.1:18084/health >/dev/null; then break; fi
+            sleep 0.2
+          done
+          curl -sf http://127.0.0.1:18084/health >/dev/null
+
+          rm -rf "$RUNNER_TEMP/qudgym-cancel-readiness"
+          NEMO_GYM_ROOT="$GITHUB_WORKSPACE/nemo-gym" \
+          NEMO_GYM_MODEL=qudgym-scripted-smoke \
+          NEMO_GYM_MODEL_URL=http://127.0.0.1:18084/v1 \
+          NEMO_GYM_MODEL_API_KEY=dummy \
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          NEMO_GYM_MODEL_TYPE=vllm_model \
+          NEMO_GYM_REPEATS=2 \
+          NEMO_GYM_CONCURRENCY=1 \
+          NEMO_GYM_HEAD_PORT=18085 \
+          NEMO_GYM_READY_TIMEOUT_SECONDS=120 \
+          scripts/run_nemo_gym_mock.sh "$RUNNER_TEMP/qudgym-cancel-readiness" >"$RUNNER_TEMP/qudgym-cancel-readiness.stdout" 2>&1 &
+          CANCEL_READY_PID=$!
+          CANCEL_WRAPPER_PIDS+=("$CANCEL_READY_PID")
+          for _ in $(seq 1 1200); do
+            if grep -q 'Waiting for head server' "$RUNNER_TEMP/qudgym-cancel-readiness/gym-readiness.log" 2>/dev/null; then break; fi
+            sleep 0.1
+          done
+          grep -q 'Waiting for head server' "$RUNNER_TEMP/qudgym-cancel-readiness/gym-readiness.log"
+          kill -TERM "$CANCEL_READY_PID"
+          if wait "$CANCEL_READY_PID"; then CANCEL_READY_STATUS=0; else CANCEL_READY_STATUS=$?; fi
+          test "$CANCEL_READY_STATUS" -eq 143
+          test ! -f "$RUNNER_TEMP/qudgym-cancel-readiness/gym-eval-run.log"
+          test ! -f "$RUNNER_TEMP/qudgym-cancel-readiness/gym-eval-profile.log"
+
+          rm -rf "$RUNNER_TEMP/qudgym-cancel-eval"
+          NEMO_GYM_ROOT="$GITHUB_WORKSPACE/nemo-gym" \
+          NEMO_GYM_MODEL=qudgym-scripted-smoke \
+          NEMO_GYM_MODEL_URL=http://127.0.0.1:18084/v1 \
+          NEMO_GYM_MODEL_API_KEY=dummy \
+          NEMO_GYM_SCRIPTED_MODEL_KEY=dummy \
+          NEMO_GYM_MODEL_TYPE=vllm_model \
+          NEMO_GYM_REPEATS=2 \
+          NEMO_GYM_CONCURRENCY=1 \
+          NEMO_GYM_HEAD_PORT=18086 \
+          NEMO_GYM_READY_TIMEOUT_SECONDS=120 \
+          scripts/run_nemo_gym_mock.sh "$RUNNER_TEMP/qudgym-cancel-eval" >"$RUNNER_TEMP/qudgym-cancel-eval.stdout" 2>&1 &
+          CANCEL_EVAL_PID=$!
+          CANCEL_WRAPPER_PIDS+=("$CANCEL_EVAL_PID")
+          for _ in $(seq 1 1200); do
+            if grep -q 'All .* servers ready' "$RUNNER_TEMP/qudgym-cancel-eval/gym-readiness.log" 2>/dev/null; then break; fi
+            sleep 0.1
+          done
+          grep -q 'All .* servers ready' "$RUNNER_TEMP/qudgym-cancel-eval/gym-readiness.log"
+          for _ in $(seq 1 1200); do
+            if [[ -f "$RUNNER_TEMP/qudgym-cancel-eval/gym-eval-run.log" ]]; then break; fi
+            sleep 0.05
+          done
+          test -f "$RUNNER_TEMP/qudgym-cancel-eval/gym-eval-run.log"
+          kill -TERM "$CANCEL_EVAL_PID"
+          if wait "$CANCEL_EVAL_PID"; then CANCEL_EVAL_STATUS=0; else CANCEL_EVAL_STATUS=$?; fi
+          test "$CANCEL_EVAL_STATUS" -eq 143
+          test ! -f "$RUNNER_TEMP/qudgym-cancel-eval/gym-eval-profile.log"
+      - name: Check the head-ownership regression
+        run: bash tests/fixtures/nemo_gym_head_ownership_test.sh
+      - name: Check the native lifecycle wrapper
+        run: |
+          bash -n scripts/run_nemo_gym_mock.sh
+          shellcheck scripts/run_nemo_gym_mock.sh tests/fixtures/nemo_gym_head_ownership_test.sh
+
   bridge-core:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -38,11 +279,20 @@ jobs:
 
   agent-eye-browser:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      # The chromium build is the slow part of this job and does not change
+      # with our source, so reuse it across runs.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium
       - run: python -m pip install -e . playwright
       - run: python -m playwright install --with-deps chromium
       - run: python scripts/check_eye_browser.py
