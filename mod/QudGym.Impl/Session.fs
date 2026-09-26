@@ -44,6 +44,9 @@ module Session =
     let mutable private waiting : Slot option = None
     let mutable private decisions = 0
     let mutable private resetUsed = false
+    // A reset that is waiting for its first boundary holds a claim but has not
+    // consumed the episode, so a bounded timeout leaves the episode resettable.
+    let mutable private resetInFlight = false
     let mutable private listening = false
     let mutable private logPath = ""
     let mutable private gameBuild = "unknown"
@@ -745,17 +748,38 @@ module Session =
             | None ->
                 fail requestId "invalid_seed" "seed must be an integer"
             | Some _ ->
+                // Take a claim, but do not consume the episode yet.
+                //
+                // The first boundary is published by the game thread once boot
+                // finishes, which can be minutes. Blocking on it unbounded, as
+                // this did, wedged the whole RPC surface: the wait happened
+                // under rpcLock, so a client that timed out and disconnected
+                // left a work item parked on `first` and every later request,
+                // hello included, blocked behind it. Consuming resetUsed before
+                // the wait made it worse -- the retry could not even claim.
                 let claimed =
                     lock gate (fun () ->
-                        if resetUsed then false
+                        if resetUsed || resetInFlight then false
                         else
-                            resetUsed <- true
+                            resetInFlight <- true
                             true)
                 if not claimed then
                     fail requestId "unsupported" "This process holds one episode; start another game to reset"
                 else
-                    let slot = first.Task.GetAwaiter().GetResult()
-                    ok requestId (transition slot.Index slot.Turn slot.Observation)
+                    let acquired = try first.Task.Wait 30000 with _ -> false
+                    let slot =
+                        if acquired then
+                            try Some(first.Task.GetAwaiter().GetResult()) with _ -> None
+                        else None
+                    match slot with
+                    | Some s ->
+                        lock gate (fun () ->
+                            resetInFlight <- false
+                            resetUsed <- true)
+                        ok requestId (transition s.Index s.Turn s.Observation)
+                    | None ->
+                        lock gate (fun () -> resetInFlight <- false)
+                        fail requestId "no_boundary" "No decision boundary published yet; retry reset"
         | "observe" ->
             if not resetUsed then fail requestId "reset_required" "Reset before observing"
             else
@@ -863,14 +887,19 @@ module Session =
                     else
                         let text = Encoding.UTF8.GetString data
                         Threading.ThreadPool.QueueUserWorkItem(fun _ ->
-                            lock rpcLock (fun () ->
-                                match dispatch text with
-                                | None -> ()
-                                | Some response ->
-                                    let bytes = Encoding.UTF8.GetBytes response
+                            // Serialize the dispatch, not the write. A send can
+                            // block on a client that stopped reading, and that
+                            // must not stall every other request.
+                            let response = lock rpcLock (fun () -> dispatch text)
+                            match response with
+                            | None -> ()
+                            | Some text' ->
+                                let bytes = Encoding.UTF8.GetBytes text'
+                                try
                                     webSocket.send Text (ArraySegment bytes) true
                                     |> Async.RunSynchronously
-                                    |> ignore))
+                                    |> ignore
+                                with _ -> ())
                         |> ignore
                 | (Ping, data, _) ->
                     do! webSocket.send Pong (ArraySegment data) true
