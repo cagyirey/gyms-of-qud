@@ -1,12 +1,22 @@
 # Validation record
 
+## Diagnostic and recording validation — 2026-09-24
+
+- Full Python suite: **154 passed** (144 inherited tests + 10 recording/diagnostic tests).
+- `qudgym smoke --atof` and `qudgym atof-validate` passed on a mock session; the stream contains paired ATOF scopes and one reset mark.
+- NVIDIA NeMo `nvidia-nat-atif[full]` 1.8 ATOF→ATIF conversion passed in a temporary Python 3.13 environment; output was ATIF-v1.7 with deterministic agent/tool steps.
+- GenAI OTel projection passed with a temporary OpenTelemetry API/SDK in-memory provider; one mock action produced root agent, workflow, and tool spans.
+- The startup-only diagnostic C# project compiled against the installed `Managed` candidate whose `Assembly-CSharp.dll` SHA-256 matched the collected manifest and whose XRL marker was present. The local compiler emitted two known assembly-version conflict warnings; no build output or game assembly is tracked.
+- `python examples/branch_and_replay.py`, the real loopback `examples/http_client.py` smoke, `qudgym smoke`, compileall, and the .NET 10 `BridgeCore` smoke test passed.
+- No game process, diagnostic log run, live API, save mutation, native NeMo rollout, or model inference was executed. The local compile is not evidence that Qud loaded the mod.
+
 ## Compatibility contract validation — 2026-09-24
 
 - Full Python suite: **144 passed** (139 inherited tests + 5 compatibility tests).
 - Typed install-manifest and diagnostic-report validation passed against synthetic fixtures.
 - `qudgym compat-validate` emitted summaries without echoing the source path or document body.
 - Compatibility schemas export through `qudgym schema`.
-- No game installation, diagnostic mod, live API, save mutation, or NeMo rollout was executed.
+- At the time of the contract-only validation, no game installation, diagnostic mod, live API, save mutation, or NeMo rollout was executed; the later diagnostic/recording checks are recorded above.
 
 ## Follow-up validation — 2026-09-24
 

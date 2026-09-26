@@ -19,6 +19,9 @@ jobs:
       - run: python -m pip install -e '.[dev]'
       - run: python -m pytest -q
       - run: qudgym smoke
+      - run: qudgym smoke --atof /tmp/qudgym-ci.atof.jsonl
+      - run: qudgym atof-validate /tmp/qudgym-ci.atof.jsonl
+      - run: qudgym schema --output /tmp/qudgym-ci-schemas
       - run: python examples/branch_and_replay.py
       - run: python -m compileall -q src scripts integrations
       - run: qudgym eye-demo --preset listener --output /tmp/eye-demo.jsonl --html /tmp/eye-demo.html
