@@ -372,28 +372,51 @@ static class ShowYesNoCancelGate
 [HarmonyPatch]
 static class PickItemGate
 {
+    // Resolved at runtime, and deliberately never throws.
+    //
+    // This threw when it failed to find the overload, and a HarmonyPatch whose
+    // target cannot be resolved aborts PatchAll for the whole assembly -- so the
+    // embark gate went with it and the game never started a character. One gate
+    // that cannot bind took down the entire mod, which is the failure this project
+    // has already paid for twice.
+    //
+    // Returning null costs one unapplied patch. That is the right trade every time:
+    // a missing loot gate is a missing feature, an unembarked game is a dead run.
     static System.Reflection.MethodBase TargetMethod()
     {
-        var pickItem = typeof(XRL.UI.PickItem);
-        foreach (var candidate in pickItem.GetMethods(
-                     System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+        try
         {
-            if (candidate.Name != "ShowPicker")
-                continue;
-            var parameters = candidate.GetParameters();
-            // Items, ref RequestInterfaceExit, CategoryPriority, Style, ...
-            if (parameters.Length != 14)
-                continue;
-            if (parameters[0].ParameterType != typeof(System.Collections.Generic.IList<XRL.World.GameObject>))
-                continue;
-            if (!parameters[1].ParameterType.IsByRef)
-                continue;
-            if (parameters[3].ParameterType != typeof(XRL.UI.PickItem.PickItemDialogStyle))
-                continue;
-            return candidate;
+            foreach (var candidate in typeof(XRL.UI.PickItem).GetMethods(
+                         System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+            {
+                if (candidate.Name != "ShowPicker")
+                    continue;
+                var parameters = candidate.GetParameters();
+                // The container overload is distinguished by taking `ref bool`, and
+                // the discriminator is the third-from-... Style at index 3. Matching
+                // on the shape rather than a parameter count, because a count is a
+                // thing that silently changes when the game is updated.
+                if (parameters.Length < 4)
+                    continue;
+                if (parameters[0].ParameterType
+                    != typeof(System.Collections.Generic.IList<XRL.World.GameObject>))
+                    continue;
+                if (!parameters[1].ParameterType.IsByRef)
+                    continue;
+                if (parameters[3].ParameterType != typeof(XRL.UI.PickItem.PickItemDialogStyle))
+                    continue;
+                return candidate;
+            }
+            QudGymBridge.Note(
+                "loot gate NOT bound: no ShowPicker(IList<GameObject>, ref bool, ...) overload;"
+                + " found " + typeof(XRL.UI.PickItem).GetMethods().Length + " ShowPicker candidates");
+            return null;
         }
-        throw new System.MissingMethodException(
-            "XRL.UI.PickItem.ShowPicker(IList<GameObject>, ref bool, ...) was not found");
+        catch (System.Exception ex)
+        {
+            QudGymBridge.Note("loot gate target resolution failed " + ex.GetBaseException().Message);
+            return null;
+        }
     }
 
     static bool Prefix(ref XRL.World.GameObject __result, ref bool RequestInterfaceExit,

@@ -1707,6 +1707,11 @@ module Session =
         // stood in, and it is the same call a player's g key makes, so the rules
         // about what can be picked up are the game's rather than a reimplementation
         // that would disagree with them.
+        // The untargeted take. The targeted one already exists and is better:
+        // `get:<name>` passes the object to the same CmdGet, so a chest is named
+        // rather than approached from a guessed compass direction. Adding a
+        // directional take as well would be a second implementation of one verb and
+        // a second thing to disagree with the game about.
         elif action = "take" then Some("CmdGet", box null)
         // CmdAttackNearest is the game's own nearest-target resolution, so this
         // inherits its idea of "nearest" and its refusal to swing at nothing
