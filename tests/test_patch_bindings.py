@@ -45,14 +45,32 @@ def test_missing_install_is_named(tmp_path):
         BINDINGS.find_managed(tmp_path)
 
 
-def test_unbuilt_mod_is_refused_without_running_anything(tmp_path, monkeypatch):
+def test_undeployed_mod_is_refused_rather_than_passing_vacuously(tmp_path, monkeypatch):
+    """A missing deployed assembly must fail the check, not skip it.
+
+    This is the failure that let an entire session of patches look verified. The
+    game loads the mod from its own Mods directory; when nothing was copied there,
+    the check read a locally built assembly instead and reported success while the
+    game ran no patches at all. "Nothing to read" has to be an error, because it is
+    indistinguishable from "everything is fine" to anyone not looking closely.
+    """
     managed = tmp_path / "CoQ.app/Contents/Resources/Data/Managed"
     managed.mkdir(parents=True)
     monkeypatch.setattr(BINDINGS.shutil, "which", lambda _: "/synthetic/dotnet")
     monkeypatch.setattr(BINDINGS.subprocess, "run",
                         lambda *a, **k: pytest.fail("must not invoke the SDK"))
-    with pytest.raises(BINDINGS.BindingError, match="not built"):
+    with pytest.raises(BINDINGS.BindingError, match="no deployed mod assembly"):
         BINDINGS.check(managed, mod_dll=managed / "QudGym.dll")
+
+
+def test_deploy_is_a_step_not_a_habit(tmp_path, monkeypatch):
+    """The check deploys before it reads, so a stale deployed copy cannot pass."""
+    called = []
+    monkeypatch.setattr(BINDINGS.subprocess, "run",
+                        lambda cmd, **k: called.append(cmd) or SimpleNamespace(
+                            returncode=0, stdout="", stderr=""))
+    BINDINGS.deploy()
+    assert called and "deploy_mod.sh" in " ".join(called[0])
 
 
 def test_missing_sdk_is_reported_rather_than_assumed(tmp_path, monkeypatch):
