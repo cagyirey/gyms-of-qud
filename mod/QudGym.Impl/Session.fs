@@ -1804,64 +1804,56 @@ module Session =
             // same thread that is already blocked waiting for one. An answer is
             // delivered by setting the result, not by pushing a key, so this does
             // not re-enter the transport.
+            // What this plan owes the prompt that is open.
+            //
+            // Not Plan.advance. A prompt being open means the walk and the talk
+            // that led to it have already happened, so asking advance to pick
+            // this turn's action re-ran them against a list holding nothing but
+            // answers: `talk:mehmet` is not in that list, came back Unsupported
+            // with the answers still queued behind it, and the conversation sat
+            // on screen with six published options and nothing pressing them.
+            // owedAnswer walks past the steps that are not answers, and it cannot
+            // advance or end anything else.
             let answered =
+                let options, acceptable, cancellable =
+                    lock gate (fun () -> offeredOptions, offeredAcceptable, offerCancellable)
+                let onOffer = answerNumbers options acceptable cancellable
                 let plan = lock gate (fun () -> currentPlan)
                 match plan with
-                | Some p ->
-                    // The answers this prompt is actually offering, so a plan naming
-                    // one that is not on offer does not get to press it.
-                    //
-                    // This used to test only that the id began with "answer:", which
-                    // every answer does, so it refused nothing. A plan's `esc` is
-                    // answer:0, and this path parsed the number without the n >= 1
-                    // rule the transport path enforces, so 0 became index 0 -- the
-                    // first option of a conversation that cannot be cancelled. The
-                    // plan asked to leave and the game was handed a choice.
-                    let offered a =
-                        let options, acceptable, cancellable =
-                            lock gate (fun () ->
-                                offeredOptions, offeredAcceptable, offerCancellable)
-                        let onOffer = answerNumbers options acceptable cancellable
-                        if a = Plan.AvailableAction then
-                            // The one the game will take. Resolved against the
-                            // options it just published, and refused when that is
-                            // not a single answer: two candidates is ambiguous,
-                            // and choosing between them silently would be
-                            // indistinguishable from knowing which was right.
-                            let acceptable =
-                                onOffer |> Array.filter (fun n -> n > 0)
-                            match acceptable with
-                            | [| only |] -> Plan.Pressed("answer:" + string only)
-                            | [||] ->
-                                Plan.Refused(
-                                    "no option the game will accept; it offered "
-                                    + string options.Length
-                                    + (if options.Length = 1 then " option" else " options")
-                                    + " and refused all of them")
-                            | many ->
-                                Plan.Refused(
-                                    "the game will accept "
-                                    + string many.Length
-                                    + " of its options ("
-                                    + (many |> Array.map string |> String.concat ", ")
-                                    + ") and the plan does not say which")
-                        else
-                            match Int32.TryParse(if a.StartsWith("answer:") then a.Substring(7) else "") with
-                            | true, n when Array.contains n onOffer -> Plan.Pressed a
-                            | true, _ -> Plan.Refused("the game is not offering " + a)
-                            | _ -> Plan.Refused("the game is not offering " + a)
-                    let view: Plan.View =
-                        { Plan.Player = player
-                          Plan.Nearby = []
-                          Plan.Entities = [] }
-                    match Plan.advance offered view p with
-                    | Plan.Stepped(action, rest) when action.StartsWith("answer:") ->
-                        let index = Plan.gameIndex (Int32.Parse(action.Substring(7)))
-                        say ("plan answers " + action)
-                        lock gate (fun () -> currentPlan <- Some rest)
-                        Some index
-                    | _ -> None
                 | None -> None
+                | Some p ->
+                    match Plan.owedAnswer p with
+                    // A named position. Answered only when the prompt is offering
+                    // it: a plan naming a choice the game will refuse is a no-op
+                    // that spends a turn, and `esc` is the game's own -1.
+                    | Some (Some index, rest) when Array.contains index onOffer ->
+                        say ("plan answers answer:" + string index)
+                        lock gate (fun () -> currentPlan <- Some rest)
+                        Some(Plan.gameIndex index)
+                    | Some (Some _, _) -> None
+                    // "The one the game will accept", resolved against the options
+                    // it just published. Refused rather than guessed: two
+                    // candidates is ambiguous, and picking between them silently
+                    // would be indistinguishable from knowing which was right.
+                    | Some (None, rest) ->
+                        let good = onOffer |> Array.filter (fun n -> n > 0)
+                        match good with
+                        | [| only |] ->
+                            say ("plan answers the one the game will accept: answer:" + string only)
+                            lock gate (fun () -> currentPlan <- Some rest)
+                            Some(Plan.gameIndex only)
+                        | [||] ->
+                            say "no option the game will accept; the plan is not answering"
+                            None
+                        | many ->
+                            say
+                                ("the game will accept "
+                                 + string many.Length
+                                 + " of its options and the plan does not say which")
+                            None
+                    // No answer owed. The prompt is left to the transport, exactly
+                    // as it was before a plan existed.
+                    | None -> None
             match answered with
             // The index is returned directly rather than through the signal: the
             // transport is the only other writer, and waiting on a task this thread

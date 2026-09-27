@@ -406,6 +406,64 @@ module Plan =
             | Finished -> advanceWith trace available view (All tailPlan)
             | Exhausted _ -> advanceWith trace available view (All tailPlan)
 
+    // -- what a plan owes an open prompt -----------------------------------
+
+    /// Take the plan's first answer, leaving everything around it in place.
+    ///
+    /// Returns the plan rewritten without that answer, and whether one was found.
+    let rec private takeAnswer (plan: Plan) : (Plan * int option) option =
+        match plan with
+        | Answer i -> Some(All [], Some i)
+        | Available -> Some(All [], None)
+        // A turn's own action, not an answer. Not ours to take here.
+        | Act(_, _) -> None
+        | Steer _ -> None
+        | Branch(test, whenTrue, whenFalse) ->
+            match takeAnswer whenTrue with
+            | Some(t, i) -> Some(Branch(test, t, whenFalse), i)
+            | None ->
+                match whenFalse with
+                | Some f ->
+                    match takeAnswer f with
+                    | Some(f', i) -> Some(Branch(test, whenTrue, Some f'), i)
+                    | None -> None
+                | None -> None
+        | Repeat(untilTest, body, limit) ->
+            match takeAnswer body with
+            | Some(b, i) -> Some(Repeat(untilTest, b, limit), i)
+            | None -> None
+        | All [] -> None
+        | All (p :: tailPlan) ->
+            let rec go acc = function
+                | [] -> None
+                | head :: rest ->
+                    match takeAnswer head with
+                    | Some(h', i) -> Some(All(List.rev acc @ (h' :: rest)), i)
+                    | None -> go (head :: acc) rest
+            go [] (p :: tailPlan)
+
+    /// The answer a plan owes the prompt that is open, and the plan without it.
+    ///
+    /// A different question from "what should this turn do", and deliberately so.
+    /// A prompt is open, which means the walk and the talk that led to it have
+    /// already happened -- so asking `advance` to pick this turn's action re-runs
+    /// those steps against a list that now contains nothing but answers. `talk:`
+    /// is not in that list, so it came back Unsupported with the answers still
+    /// queued behind it, and the prompt was published with nothing pressing it:
+    /// six options on screen, a plan that had walked there and stopped.
+    ///
+    /// This cannot advance, skip, or end anything else. It walks past the steps
+    /// that are not answers and takes the first one that is, so a plan can owe an
+    /// answer without the walk that preceded it being re-decided. When the plan has
+    /// no answer left it returns nothing, and the prompt is left to the transport
+    /// exactly as it was before a plan existed.
+    ///
+    /// The index is the position, or None for "the one the game will accept".
+    let owedAnswer (plan: Plan) : (int option * Plan) option =
+        match takeAnswer plan with
+        | Some(remaining, index) -> Some(index, remaining)
+        | None -> None
+
     // -- a writable syntax ------------------------------------------------
 
     /// Parse a test: at X Y | near X Y R | sees R <name> | says <text>

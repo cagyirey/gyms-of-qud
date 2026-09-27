@@ -126,7 +126,9 @@ async def run(program: str) -> None:
             if not status.get("running"):
                 break
 
-        observation = unwrap(await rpc.call("observe", timeout=120)).get("observation", {})
+        # observe returns the observation bare; only reset wraps it.
+        observed = unwrap(await rpc.call("observe", timeout=120))
+        observation = observed.get("observation", observed)
 
     print("\n=== observation ===")
     print("phase:", observation.get("phase"), "turn:", observation.get("turn"))

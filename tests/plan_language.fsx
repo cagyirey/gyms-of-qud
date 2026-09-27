@@ -252,6 +252,16 @@ checkEqOne
      | Plan.Unavailable(r, _) -> "UNAVAILABLE: " + r
      | _ -> "something else")
 
+// -- what a plan owes an open prompt ----------------------------------------
+
+// A branch that reaches its answer through the other arm still owes it.
+checkEqOne
+    "an answer behind a branch is still owed"
+    (Some 2)
+    (Plan.owedAnswer (parse "goto mehmet\nif at 1 1 then move:N\noptions 2")
+     |> Option.map fst
+     |> Option.flatten)
+
 // -- the 1-based to 0-based conversion ---------------------------------------
 
 // A plan names answer:3 for the third option. The game indexes from zero. This
