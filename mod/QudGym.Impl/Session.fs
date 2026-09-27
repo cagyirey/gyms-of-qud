@@ -1337,6 +1337,45 @@ module Session =
         elif action = "quests" then Some("CmdQuests", box null)
         elif action = "journal" then Some("CmdJournal", box null)
         elif action = "history" then Some("CmdMessageHistory", box null)
+        elif action.StartsWith("wield:") then
+            // wield:<item> -- equip without naming a slot, which is what makes the
+            // game ask which slot.
+            //
+            // EquipmentScreen always names the slot, because the player picked it on
+            // the screen. The harness can name it too, so this fires
+            // CommandEquipObject with no BodyPart, and the game takes the branch at
+            // Inventory.cs:1751: with the slot unspecified it asks, via
+            // Popup.PickOption, which slot the item should go in. That question is
+            // published rather than drawn, by the menu gate.
+            //
+            // So the two features are one loop: equip with a slot needs no menu, and
+            // equip without one is exactly what produces a menu to answer. This is
+            // also the honest way to reach the gate -- the case is provoked by the
+            // game's own logic, not by a test-only entry point.
+            let itemName = action.Substring(6).Trim()
+            match findCarriedByName player itemName with
+            | null -> None
+            | item ->
+                try
+                    let eventType = (gameAssembly ()).GetType("XRL.World.Event", false)
+                    let ctor =
+                        eventType.GetConstructor(
+                            [| typeof<string>; typeof<string>; typeof<obj> |])
+                    // The three-argument form sets a single parameter. BodyPart is
+                    // deliberately absent: supplying it would skip the question.
+                    let evt = ctor.Invoke([| box "CommandEquipObject"; box "Object"; box item |])
+                    let fire =
+                        player.GetType().GetMethod(
+                            "FireEvent",
+                            BindingFlags.Instance ||| BindingFlags.Public,
+                            null,
+                            [| eventType |],
+                            null)
+                    fire.Invoke(player, [| evt |]) |> ignore
+                    Some("CmdNone", box null)
+                with ex ->
+                    say ("wield failed: " + ex.GetBaseException().Message)
+                    None
         elif action.StartsWith("equip:") then
             // equip:<slot>:<item>, both named the way the player reads them.
             //
