@@ -1949,6 +1949,30 @@ module Session =
                 | None ->
                     left <- 0
                     halted <- true
+                | Some slot when action.StartsWith("talk:") ->
+                    // A conversation is a question, and the answer cannot come from
+                    // here.
+                    //
+                    // Everything else is claimed, executed and then waited for: the
+                    // next boundary means the action happened. A conversation is not
+                    // like that. tryDirect runs on the game turn thread, the game's
+                    // own HaveConversation is synchronous, and it reaches the popup
+                    // hook, which blocks waiting for an answer. The only way to answer
+                    // is the transport thread's answer op -- and this thread is the
+                    // one that would deliver it.
+                    //
+                    // So waiting here is a deadlock with a 120 second fuse: run never
+                    // returns, the caller never gets to answer, the conversation times
+                    // out, and afterwards the log reads "no conversation started" for a
+                    // conversation that started, ran, published three options and
+                    // finished. Then the fallthrough starts a second one.
+                    //
+                    // The action is claimed and the script returns immediately. The
+                    // conversation publishes its own boundary from inside itself, which
+                    // the caller observes and answers, so the loop is caller-driven
+                    // exactly as it should be for a prompt.
+                    doneCount <- doneCount + 1
+                    left <- left - 1
                 | Some slot ->
                     // Bounded. No progress expires the script rather than
                     // parking on it, which is what the old scheduler did when
