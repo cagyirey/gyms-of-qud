@@ -55,6 +55,16 @@ module Session =
     // that stops early is otherwise indistinguishable from a plan that
     // finished, which is how a one-step run reported itself as finished.
     let mutable private planTrace = ""
+    // The game's own message log, captured as text.
+    //
+    // Scraping TextConsole.CurrentBuffer gave "????": ScreenBuffer.ToString
+    // does walk the cells, but the log is drawn through a glyph table, so the
+    // cell characters are not the message. XRLCore hands out the real string
+    // through RegisterNewMessageLogEntryCallback, and only for entries the game
+    // actually logged, which is also the perception boundary we want.
+    let logGate = obj ()
+    let logMessages = ResizeArray<string>()
+    let mutable logHooked = false
     let mutable private planSteps = 0
     // A reset that is waiting for its first boundary holds a claim but has not
     // consumed the episode, so a bounded timeout leaves the episode resettable.
@@ -405,7 +415,58 @@ module Session =
                 else null
         with _ -> null
 
-    let private messagesJson () =
+    /// Subscribe to the game's message log, once.
+    let private ensureLogHook () =
+        if logHooked then ()
+        else
+            try
+                let asm =
+                    AppDomain.CurrentDomain.GetAssemblies()
+                    |> Array.find (fun a -> a.GetName().Name = "Assembly-CSharp")
+                let core = asm.GetType("XRL.Core.XRLCore", false)
+                let m =
+                    core.GetMethod(
+                        "RegisterNewMessageLogEntryCallback",
+                        BindingFlags.Static ||| BindingFlags.Public
+                        ||| BindingFlags.NonPublic)
+                if isNull m then failwith "no RegisterNewMessageLogEntryCallback"
+                let callback: Action<string> =
+                    Action<string>(fun (text: string) ->
+                        if not (String.IsNullOrWhiteSpace text) then
+                            lock logGate (fun () ->
+                                logMessages.Add(text.Trim())
+                                if logMessages.Count = 1 && logPath <> "" then
+                                    Probe.record logPath ("message log first entry: " + text.Trim())
+                                    |> ignore
+                                // Bound it: an unattended game would otherwise
+                                // accumulate without limit.
+                                if logMessages.Count > 200 then
+                                    logMessages.RemoveAt 0))
+                m.Invoke(null, [| box callback |]) |> ignore
+                logHooked <- true
+                if logPath <> "" then
+                    Probe.record logPath "message log hooked" |> ignore
+            with ex ->
+                // Never swallow this silently. A hook that failed to install
+                // leaves the projection reading a glyph table, which looks like
+                // "no messages" rather than like a broken hook, and that is how
+                // a whole session of ??? went unquestioned.
+                if logPath <> "" then
+                    Probe.record logPath
+                        ("message log hook FAILED " + ex.GetBaseException().Message)
+                    |> ignore
+
+    /// Messages the game logged since the last call, oldest first.
+    let private drainLog () =
+        ensureLogHook ()
+        lock logGate (fun () ->
+            if logMessages.Count = 0 then [||]
+            else
+                let out = logMessages.ToArray()
+                logMessages.Clear()
+                out)
+
+    let private bufferMessages () =
         match currentBuffer () with
         | null -> "[]"
         | buffer ->
@@ -429,6 +490,19 @@ module Session =
                     |> Array.rev
                 "[" + String.concat "," (Array.map jsonString picked) + "]"
             with _ -> "[]"
+
+    /// What the player was shown, as text.
+    ///
+    /// The log hook is the source. The buffer scrape is kept only as a fallback
+    /// for a boundary that arrives before the hook is installed, and it is
+    /// labelled as such by returning it only when the log is empty.
+    let private messagesJson () =
+        let logged = drainLog ()
+        if logged.Length > 0 then
+            let picked = logged |> Array.truncate 20
+            "[" + String.concat "," (Array.map jsonString picked) + "]"
+        else
+            bufferMessages ()
 
     let private observation (player: obj) turn index =
         let cell = memberValue player "CurrentCell"
@@ -1120,4 +1194,8 @@ module Session =
                     Threading.Thread.Sleep(20)
             if not bound then failwith "control socket did not bind"
             File.WriteAllText(controlPath, "ws://127.0.0.1:8765/rpc\n" + token + "\n")
+            // Subscribe now, not at the first decision boundary. The game logs
+            // its opening text and the quest prompt before any boundary is
+            // published, so a lazy hook misses exactly the lines that matter.
+            ensureLogHook ()
             Probe.record diagnosticPath "control listening" |> ignore
