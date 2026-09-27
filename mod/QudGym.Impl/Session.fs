@@ -480,6 +480,87 @@ module Session =
         let logged = recentLog 12
         "[" + String.concat "," (Array.map jsonString logged) + "]"
 
+
+    let private say (m: string) =
+        if logPath <> "" then Probe.record logPath ("talk: " + m) |> ignore
+    let private gameAssembly () =
+        AppDomain.CurrentDomain.GetAssemblies()
+        |> Array.find (fun a -> a.GetName().Name = "Assembly-CSharp")
+
+    let private show (v: obj) =
+        if isNull v then "" else v.ToString()
+
+    /// The live conversation, if one is open, as prompt text and its options.
+    ///
+    /// The player is meant to choose from the options the game offers, so they
+    /// are read from ConversationUI.CurrentChoices and published as the prompt
+    /// rather than summarised. The list is the game's, so a caller cannot be
+    /// offered an answer the conversation does not contain.
+    let private conversationPrompt () =
+        try
+            let ui = (gameAssembly ()).GetType("XRL.UI.ConversationUI", false)
+            if isNull ui then None
+            else
+                let choices = ui.GetField("CurrentChoices", BindingFlags.Static ||| BindingFlags.Public)
+                match choices.GetValue(null) with
+                | :? System.Collections.IList as list when list.Count > 0 ->
+                    let mutable options = [||]
+                    for i in 0 .. list.Count - 1 do
+                        let display =
+                            list.[i].GetType().GetMethod("GetDisplayText", BindingFlags.Instance ||| BindingFlags.Public)
+                        let text =
+                            try
+                                match display.GetParameters().Length with
+                                | 0 -> show (display.Invoke(list.[i], [||]))
+                                | _ -> show (display.Invoke(list.[i], [| box false |]))
+                            with _ -> ""
+                        options <- Array.append options [| text |]
+                    // The conversation's own opening line, when it has one.
+                    let speaker =
+                        let current = ui.GetField("CurrentConversation", BindingFlags.Static ||| BindingFlags.Public)
+                        match current.GetValue(null) with
+                        | null -> ""
+                        | c ->
+                            let nm = c.GetType().GetProperty("Speaker", BindingFlags.Instance ||| BindingFlags.Public)
+                            try show (nm.GetValue(c, null)) with _ -> ""
+                    Some(speaker, options)
+                | _ -> None
+        with _ -> None
+
+    /// Answer a conversation by feeding its own key loop.
+    ///
+    /// A conversation reads keys through Keyboard.getvk and only then calls
+    /// ConversationUI.Select. So the reply is a pushed key, not a direct call:
+    /// the game receives it exactly as it receives a human's, and the option is
+    /// chosen by the game's own code. Calling Select from here instead would
+    /// race the loop that is already blocked waiting for that key.
+    ///
+    /// The first nine options are the digit keys, which is how the game labels
+    /// them; beyond that it switches to letters.
+    let private pressAnswerKey (index: int) =
+        try
+            let keyboard = (gameAssembly ()).GetType("ConsoleLib.Console.Keyboard", false)
+            if isNull keyboard then false
+            else
+                let keyCode = (gameAssembly ()).GetType("UnityEngine.KeyCode", false)
+                let pushKey = keyboard.GetMethod("PushKey", [| keyCode |])
+                if isNull pushKey || isNull keyCode then false
+                else
+                    // D1..D9 for the first nine, then A.. as the game does.
+                    let name =
+                        if index < 9 then "D" + string (index + 1)
+                        else "A" + string (char (int 'A' + index - 9))
+                    let field = keyCode.GetField(name, Reflection.BindingFlags.Static ||| Reflection.BindingFlags.Public)
+                    if isNull field then
+                        say ("no key for option " + string (index + 1))
+                        false
+                    else
+                        pushKey.Invoke(null, [| field.GetValue(null) |]) |> ignore
+                        true
+        with ex ->
+            say ("press failed: " + ex.GetBaseException().Message)
+            false
+
     let private observation (player: obj) turn index =
         let cell = memberValue player "CurrentCell"
         let x, y, rows, zone, width, height = window cell
@@ -490,9 +571,39 @@ module Session =
         let entities = entitiesJson player zone x y
         let messages = messagesJson ()
         let id = episode + ":" + string index
+        // A conversation is the one place the player must choose from a list the
+        // game builds, so the options are published verbatim as a prompt and the
+        // only actions offered are the answers to it. A caller is therefore never
+        // offered an answer the conversation does not contain.
+        let conversation = conversationPrompt ()
+        let promptJson =
+            match conversation with
+            | None -> "null"
+            | Some (speaker, options) ->
+                let body =
+                    if options.Length > 0 then String.concat " / " options else "(no options yet)"
+                sprintf
+                    "{\"kind\":\"choice\",\"text\":%s,\"options\":[%s]}"
+                    (jsonString (if speaker = "" then body else speaker + ": " + body))
+                    (String.concat "," (Array.map jsonString options))
+        let actions =
+            match conversation with
+            | Some (_, options) when options.Length > 0 ->
+                let answers =
+                    options
+                    |> Array.mapi (fun i text ->
+                        sprintf
+                            "{\"id\":%s,\"kind\":\"answer\",\"label\":%s,\"arguments\":{\"option\":%d}}"
+                            (jsonString ("answer:" + string (i + 1)))
+                            (jsonString text)
+                            (i + 1))
+                    |> String.concat ","
+                "[" + answers + "]"
+            | _ -> actionsJsonSafe player
+        let phase = if conversation.IsSome then "prompt" else "command"
         id, sprintf
-            "{\"episode_id\":%s,\"decision_id\":%s,\"turn\":%d,\"phase\":\"command\",\"player\":{\"x\":%d,\"y\":%d,\"hp\":%d,\"max_hp\":%d},\"view\":{\"radius\":%d,\"zone_width\":%d,\"zone_height\":%d},\"tiles\":[%s],\"entities\":%s,\"messages\":%s,\"prompt\":null,\"actions\":%s}"
-            (jsonString episode) (jsonString id) turn x y hp maxHp radius width height tiles entities messages (actionsJsonSafe player)
+            "{\"episode_id\":%s,\"decision_id\":%s,\"turn\":%d,\"phase\":%s,\"player\":{\"x\":%d,\"y\":%d,\"hp\":%d,\"max_hp\":%d},\"view\":{\"radius\":%d,\"zone_width\":%d,\"zone_height\":%d},\"tiles\":[%s],\"entities\":%s,\"messages\":%s,\"prompt\":%s,\"actions\":%s}"
+            (jsonString episode) (jsonString id) turn (jsonString phase) x y hp maxHp radius width height tiles entities messages promptJson actions
 
     let private transition index turn observationJson =
         sprintf
@@ -704,9 +815,6 @@ module Session =
             ring <- ring + 1
         found
 
-    let private gameAssembly () =
-        AppDomain.CurrentDomain.GetAssemblies()
-        |> Array.find (fun a -> a.GetName().Name = "Assembly-CSharp")
 
     /// Start a conversation with a target, using the game's own entry point.
     ///
@@ -721,11 +829,6 @@ module Session =
     /// first and only shows the conversation when that returns false, so asking
     /// the watervine farmer a question produced no output at all and looked
     /// like a no-op rather than a suppressed conversation.
-    let private say (m: string) =
-        if logPath <> "" then Probe.record logPath ("talk: " + m) |> ignore
-
-    let private show (v: obj) =
-        if isNull v then "(null)" else v.ToString()
 
     let private attemptConversation (target: obj) =
         try
@@ -857,6 +960,15 @@ module Session =
                             None
                     | None -> say ("no route to " + string tx + "," + string ty); None
                 with _ -> None
+        else if action.StartsWith("answer:") then
+            // Answer a conversation option. The number is what the player sees:
+            // the game labels its first nine options 1..9.
+            let raw = action.Substring(7).Trim()
+            match Int32.TryParse raw with
+            | false, _ -> None
+            | true, n when n >= 1 ->
+                if pressAnswerKey (n - 1) then Some("CmdNone", box null) else None
+            | true, _ -> None
         else if action.StartsWith("talk:") then
             let name = action.Substring(5)
             // Adjacent only, matching CmdTalk's own rule via GetCellFromDirection.

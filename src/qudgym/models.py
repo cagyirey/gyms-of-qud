@@ -68,6 +68,12 @@ class ViewInfo(Model):
 class Prompt(Model):
     kind: Literal["choice", "direction", "target", "text"]
     text: str
+    # The options the game itself offers, in the order it numbers them. A
+    # conversation is the one place the player must choose from a list the game
+    # builds, so those options are published rather than summarised: a caller
+    # that cannot see them cannot answer, and one shown a paraphrase may answer
+    # the wrong thing. Empty when the prompt is not a choice.
+    options: tuple[str, ...] = ()
 
 
 class Observation(Model):

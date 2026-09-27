@@ -157,6 +157,14 @@
         "text": {
           "title": "Text",
           "type": "string"
+        },
+        "options": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Options",
+          "type": "array"
         }
       },
       "required": [
