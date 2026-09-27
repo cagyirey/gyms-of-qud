@@ -161,6 +161,12 @@ module Session =
         | :? int16 as n -> int n
         | _ -> Convert.ToInt32(value)
 
+    let private say (m: string) =
+        if logPath <> "" then Probe.record logPath ("talk: " + m) |> ignore
+    let private gameAssembly () =
+        AppDomain.CurrentDomain.GetAssemblies()
+        |> Array.find (fun a -> a.GetName().Name = "Assembly-CSharp")
+
     let private call (target: obj) name (args: obj[]) =
         let methods =
             target.GetType().GetMethods(BindingFlags.Instance ||| BindingFlags.Public)
@@ -501,11 +507,262 @@ module Session =
         "[" + String.concat "," (Array.map jsonString logged) + "]"
 
 
-    let private say (m: string) =
-        if logPath <> "" then Probe.record logPath ("talk: " + m) |> ignore
-    let private gameAssembly () =
-        AppDomain.CurrentDomain.GetAssemblies()
-        |> Array.find (fun a -> a.GetName().Name = "Assembly-CSharp")
+    /// The part of the form type, e.g. the Inventory on the player.
+    let private partOfType (target: obj) (typeName: string) =
+        let partType = (gameAssembly ()).GetType(typeName, false)
+        if isNull partType then null
+        else
+            try
+                let getter =
+                    target.GetType().GetMethods(BindingFlags.Instance ||| BindingFlags.Public)
+                    |> Array.tryFind (fun m ->
+                        m.Name = "GetPart" && m.IsGenericMethodDefinition
+                        && m.GetParameters().Length = 0)
+                match getter with
+                | None -> null
+                | Some g -> g.MakeGenericMethod(partType).Invoke(target, [||])
+            with _ -> null
+
+    /// A name without the game's console markup.
+    ///
+    /// Names arrive as "{{W|left hand}}" and "{{C|1}} wrench". The markup is how the
+    /// console renders a name, not part of it, and a caller is given the text a
+    /// player reads -- otherwise no name a caller could type would ever match, and
+    /// every equip would be refused for a reason invisible from the outside.
+    ///
+    /// Markup.Strip does this, and the game already uses it for exactly this purpose
+    /// when copying a name to the scrap buffer, so there is no second parser here to
+    /// disagree with the console's.
+    ///
+    /// What does not work, having been tried: Markup.Transform renders rather than
+    /// strips, so its output still contains tag-shaped runs, and two attempts to use
+    /// it failed identically -- the second after correctly matching its ReadOnlySpan
+    /// overload and invoking it. A hand-rolled depth-counted scan was also wrong: it
+    /// dropped the entire contents of a tag rather than the tag alone, turning
+    /// "{{W|left hand}}" into the empty string.
+    let private stripMarkup (text: string) =
+        if String.IsNullOrEmpty text then ""
+        else
+            try
+                // Markup.Strip, not Markup.Transform. Transform renders -- it returns
+                // markup with console escapes substituted, so its output still
+                // contains tag-shaped runs. Strip removes the tags, which is what
+                // "the text a player reads" means.
+                let markup = (gameAssembly ()).GetType("ConsoleLib.Console.Markup", false)
+                let strip =
+                    markup.GetMethods(BindingFlags.Static ||| BindingFlags.Public)
+                    |> Array.tryFind (fun m ->
+                        m.Name = "Strip"
+                        && m.GetParameters().Length = 1
+                        && m.GetParameters().[0].ParameterType = typeof<string>
+                        && m.ReturnType = typeof<string>)
+                match strip with
+                | Some s ->
+                    let result = s.Invoke(null, [| box text |]) :?> string
+                    if String.IsNullOrEmpty result then text.Trim() else result.Trim()
+                | None -> text.Trim()
+            with _ -> text.Trim()
+
+    /// The player's bodypart with this player-visible name, e.g. "left hand".
+    ///
+    /// The name is BodyPart.GetOrdinalName, the same string the equipment screen
+    /// and the game's own messages use. Deliberately not derived from the BodyPart
+    /// object, its blueprint or its position hint: a slot the player can read is
+    /// the only slot a caller may be given, so nothing here carries an object
+    /// identity.
+    let private findBodyPartByName (player: obj) (slotName: string) =
+        try
+            let wanted = slotName.Trim().ToLowerInvariant()
+            let body = partOfType player "XRL.World.Parts.Body"
+            if isNull body then
+                say "no Body part; cannot name equipment slots"
+                null
+            else
+                // Body has four GetParts overloads: two that return void and fill an
+                // out-parameter, one that takes EvenIfDismembered, and the
+                // parameterless List<BodyPart> this wants. Arity alone does not
+                // separate them -- two of them take one argument -- so the return
+                // type is tested too, otherwise the void overloads are chosen, come
+                // back as null, and read as "no such slot".
+                //
+                // IsGenericType, not a test on the name. The name is "List`1" with
+                // one backtick, and a two-backtick literal does not match it, which
+                // made every lookup report that no such method existed.
+                let getter =
+                    body.GetType().GetMethods(BindingFlags.Instance ||| BindingFlags.Public)
+                    |> Array.tryFind (fun m ->
+                        m.Name = "GetParts"
+                        && m.GetParameters().Length = 0
+                        && m.ReturnType.IsGenericType)
+                match getter with
+                | None ->
+                    say "no parameterless Body.GetParts()"
+                    null
+                | Some g ->
+                    match g.Invoke(body, [||]) with
+                    | :? System.Collections.IEnumerable as items ->
+                        let names = ResizeArray<string>()
+                        let mutable found = null
+                        for part in items do
+                            if not (isNull part) then
+                                let ordName =
+                                    try
+                                        let m =
+                                            part.GetType().GetMethod(
+                                                "GetOrdinalName",
+                                                BindingFlags.Instance ||| BindingFlags.Public)
+                                        if isNull m then "" else stripMarkup (m.Invoke(part, [||]) :?> string)
+                                    with _ -> ""
+                                names.Add(ordName)
+                                if isNull found && ordName.ToLowerInvariant() = wanted then
+                                    found <- part
+                        // A miss is reported with the names that do exist, so an
+                        // unreachable action says which spelling would have worked
+                        // instead of only that it did not.
+                        if isNull found then
+                            say
+                                (sprintf "no slot named '%s'; the player has: %s"
+                                    slotName
+                                    (String.concat ", " (List.ofSeq names)))
+                        found
+                    | _ ->
+                        say "Body.GetParts() returned nothing enumerable"
+                        null
+        with ex ->
+            say ("slot lookup failed: " + ex.GetBaseException().Message)
+            null
+
+    /// The items that may be equipped into a slot, as the game itself filters them.
+    ///
+    /// RequirePossible: true is the filter the equipment screen uses, so the
+    /// candidate list is exactly the list the player would have been offered. The
+    /// grammar's candidates and the game's rules come from one call, which is what
+    /// makes an invalid equip unrepresentable rather than merely rejected.
+    let private equipCandidates (player: obj) (slotName: string) =
+        let inventory = partOfType player "XRL.World.Parts.Inventory"
+        let slot = findBodyPartByName player slotName
+        if isNull inventory || isNull slot then None
+        else
+            try
+                // The query takes the slot *type* ("Hand"), not the slot name, so
+                // the name is resolved to a BodyPart first and its Type is passed on.
+                let slotType = memberValue slot "Type" :?> string
+                // Four overloads, and arity does not separate them: two take four
+                // parameters and two take five, each pair split between one that
+                // returns a List and one that fills an out-parameter and returns
+                // void. Only the (SlotType, RequireDesirable, RequirePossible,
+                // SkipSort) form both takes no ObjectList and returns the list, so
+                // that is what is selected. Picking by arity alone had picked a void
+                // overload, which returns null and reads as "nothing is equippable".
+                let getter =
+                    inventory.GetType().GetMethods(BindingFlags.Instance ||| BindingFlags.Public)
+                    |> Array.tryFind (fun m ->
+                        m.Name = "GetEquipmentListForSlot"
+                        && m.GetParameters().Length = 4
+                        && m.ReturnType.IsGenericType)
+                match getter with
+                | None ->
+                    say "no GetEquipmentListForSlot(SlotType, RequireDesirable, RequirePossible, SkipSort)"
+                    None
+                | Some m ->
+                    // RequireDesirable: false, RequirePossible: true -- the same
+                    // filter the equipment screen applies, so "possible" is the rule
+                    // and not "desirable", which would hide items the player may
+                    // still legally equip.
+                    match m.Invoke(inventory, [| box slotType; box false; box true; box false |]) with
+                    | :? System.Collections.IEnumerable as items ->
+                        [ for item in items do
+                              if not (isNull item) then
+                                  match memberValue item "DisplayName" with
+                                  | :? string as s -> yield stripMarkup s
+                                  | _ -> () ]
+                        |> Some
+                    | _ -> None
+            with ex ->
+                say ("equip candidates failed: " + ex.GetBaseException().Message)
+                None
+
+    /// Whether a name picks this item out of a list, the way the game reads a typed
+    /// name.
+    ///
+    /// Exact equality on the visible name is not how a player selects a thing. The
+    /// real name of a quest item is qualified -- "waterskin [32 drams of fresh water]",
+    /// "torch x11 (unburnt)" -- so requiring the caller to reproduce the quantity and
+    /// the fill level would make the grammar depend on transient state, and a name
+    /// typed from one observation would stop matching after a sip of water. The
+    /// unqualified stem is what identifies the item; the rest is its current state,
+    /// which the player sees but does not name.
+    ///
+    /// A stem that is a prefix of the name is a match, so "waterskin" selects
+    /// "waterskin [empty]". This is deliberately the same leniency the console uses
+    /// for "get torch": a short unambiguous stem beats demanding the full string. It
+    /// is not a substring search over arbitrary text -- the stem must be a leading
+    /// run of the name, so "skin" does not select a waterskin.
+    let private nameSelects (typed: string) (candidateName: string) =
+        let wanted = typed.Trim().ToLowerInvariant()
+        let actual = stripMarkup candidateName
+        if wanted = "" then false
+        elif actual.ToLowerInvariant() = wanted then true
+        elif actual.Length > wanted.Length && actual.ToLowerInvariant().StartsWith(wanted) then
+            // Only when the character after the stem closes the name, so "water"
+            // does not select "waterskin" while "waterskin" still does not match
+            // "waterson". Bracketed and counted suffixes both start with a
+            // separator, which is what makes the boundary unambiguous.
+            let boundary = actual.[wanted.Length]
+            Char.IsWhiteSpace boundary || boundary = '[' || boundary = '('
+        else false
+
+    /// A carried item this name selects, or null.
+    ///
+    /// Only what the player is carrying. No object identity, blueprint or inventory
+    /// handle is returned, and the search is over the player's own inventory rather
+    /// than every object in the zone, so an item the player cannot see is never
+    /// equippable here. Ambiguity is a refusal, not a coin flip: if the name selects
+    /// more than one carried item the action is rejected and both are reported, the
+    /// same rule extraction follows for a reason that has nothing to do with
+    /// confidence scoring.
+    let private findCarriedByName (player: obj) (itemName: string) =
+        try
+            if String.IsNullOrWhiteSpace itemName then null
+            else
+                let inventory = partOfType player "XRL.World.Parts.Inventory"
+                if isNull inventory then null
+                else
+                    // GetObjectsReadonly, not GetObjects: the equipment query and
+                    // this search then agree on the same set, and nothing here can
+                    // mutate the inventory while resolving a name.
+                    let getter =
+                        inventory.GetType().GetMethods(BindingFlags.Instance ||| BindingFlags.Public)
+                        |> Array.tryFind (fun m ->
+                            m.Name = "GetObjectsReadonly" && m.GetParameters().Length = 0)
+                    match getter with
+                    | None -> null
+                    | Some g ->
+                        match g.Invoke(inventory, [||]) with
+                        | :? System.Collections.IEnumerable as items ->
+                            let hits = ResizeArray<obj * string>()
+                            for item in items do
+                                if not (isNull item) then
+                                    let name =
+                                        match memberValue item "DisplayName" with
+                                        | :? string as s -> stripMarkup s
+                                        | _ -> ""
+                                    if nameSelects itemName name then hits.Add(item, name)
+                            // Annotated as obj so each arm is a plain null rather
+                            // than unifying the match into an option type.
+                            match hits.Count with
+                            | 1 -> box (fst hits.[0]) :> obj
+                            | 0 -> null
+                            | _ ->
+                                say
+                                    (sprintf "'%s' is ambiguous; you carry: %s"
+                                        itemName
+                                        (String.concat ", " [ for _, n in hits -> n ]))
+                                null
+                        | _ -> null
+        with ex ->
+            say ("carried lookup failed: " + ex.GetBaseException().Message)
+            null
 
     let private show (v: obj) =
         if isNull v then "" else v.ToString()
@@ -1080,6 +1337,98 @@ module Session =
         elif action = "quests" then Some("CmdQuests", box null)
         elif action = "journal" then Some("CmdJournal", box null)
         elif action = "history" then Some("CmdMessageHistory", box null)
+        elif action.StartsWith("equip:") then
+            // equip:<slot>:<item>, both named the way the player reads them.
+            //
+            // The three steps are the game's own, in the order EquipmentScreen
+            // uses them: ask the game which items may go in this slot, then fire
+            // the event it fires when the player picks one. No picker is opened and
+            // no keystroke is synthesized, so this cannot be refused by
+            // TutorialManager.AllowPushKey the way a key into a live popup is.
+            //
+            // Both names are resolved before anything is fired, and a name the
+            // player could not have read is a refusal rather than a guess: the
+            // candidate list comes from GetEquipmentListForSlot, so the item named
+            // here is either in the set the game would have offered or it is not
+            // equippable and the action is rejected as such.
+            let rest = action.Substring(6)
+            let split = rest.IndexOf ':'
+            if split <= 0 then
+                say "equip needs equip:<slot>:<item>"
+                None
+            else
+                let slotName = rest.Substring(0, split).Trim()
+                let itemName = rest.Substring(split + 1).Trim()
+                match equipCandidates player slotName with
+                | None ->
+                    say ("no slot '" + slotName + "' you can read, or it takes nothing")
+                    None
+                | Some candidates ->
+                    let selectable =
+                        candidates |> List.filter (fun c -> nameSelects itemName c)
+                    match selectable with
+                    | [] ->
+                        say
+                            (sprintf "'%s' is not equippable to '%s'; the game offers: %s"
+                                itemName slotName
+                                (if candidates.IsEmpty then "(nothing)"
+                                 else String.concat ", " candidates))
+                        None
+                    // Two candidates the name selects is ambiguous, not first-wins.
+                    // Picking one would make the outcome depend on the order the
+                    // game's query happened to return, which is not information a
+                    // caller can see or reason about. The rule matches extraction:
+                    // two readings of the same intent are a refusal.
+                    | [ _; _ ] as several ->
+                        say
+                            (sprintf "'%s' is ambiguous for '%s'; it could mean: %s"
+                                itemName slotName (String.concat ", " several))
+                        None
+                    | [ chosen ] ->
+                        try
+                            let slot = findBodyPartByName player slotName
+                            // Matched on the same stripped text the candidate list was
+                            // matched on, so the item found here is the item validated
+                            // there rather than a second, subtly different lookup.
+                            let item = findCarriedByName player (stripMarkup chosen)
+                            if isNull item then
+                                say ("not carrying '" + chosen + "'")
+                                None
+                            elif isNull slot then
+                                say ("no slot '" + slotName + "'")
+                                None
+                            else
+                                // CommandEquipObject with a BodyPart named, which
+                                // is the branch that does not open a menu. The
+                                // five-argument constructor takes both parameters
+                                // directly, which is how the game itself builds
+                                // this event, so nothing is set afterwards and
+                                // there is no partially-built event to fire.
+                                let eventType = (gameAssembly ()).GetType("XRL.World.Event", false)
+                                let ctor =
+                                    eventType.GetConstructor(
+                                        [| typeof<string>; typeof<string>; typeof<obj>;
+                                           typeof<string>; typeof<obj> |])
+                                let evt =
+                                    ctor.Invoke(
+                                        [| box "CommandEquipObject"; box "Object"; box item
+                                           box "BodyPart"; box slot |])
+                                // FireEvent(Event) is chosen by parameter type rather
+                                // than arity: FireEvent has six overloads, five of
+                                // them taking two arguments.
+                                let fire =
+                                    player.GetType().GetMethod(
+                                        "FireEvent",
+                                        BindingFlags.Instance ||| BindingFlags.Public,
+                                        null,
+                                        [| eventType |],
+                                        null)
+                                fire.Invoke(player, [| evt |]) |> ignore
+                                say (sprintf "equipped %s to %s" (stripMarkup chosen) (stripMarkup slotName))
+                                Some("CmdNone", box null)
+                        with ex ->
+                            say ("equip failed: " + ex.GetBaseException().Message)
+                            None
         elif action.StartsWith("far:") then
             let d = action.Substring(4)
             if directions |> Array.exists (fun (name, _, _) -> name = d) then
