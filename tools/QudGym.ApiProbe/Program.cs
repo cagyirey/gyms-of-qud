@@ -132,6 +132,12 @@ internal static class Queries
         ["XRL.World.BeforeRenderEvent"] = [],
         ["XRL.World.BeginTakeActionEvent"] = [],
         ["XRL.The"] = ["Player", "Game"],
+        ["XRL.Core.XRLCore"] = [],
+        ["XRL.World.AI.Pathfinding"] = [],
+        ["XRL.World.Parts.Interactable"] = [],
+        ["XRL.CharacterBuilds.EmbarkBuilder"] = [],
+        ["XRL.CharacterBuilds.AbstractEmbarkBuilderModule"] = [],
+                ["ConsoleLib.Console+TextConsole"] = ["Get", "Row", "Buffer", "Scroll", "Lines"],
         ["XRL.World.GameObject"] = ["CurrentCell", "DisplayName", "Stat", "Visible", "Render",
             "Inventory", "Body", "ActivatedAbilit", "GetPart", "HasPart", "AddPart"],
         ["XRL.World.Cell"] = ["Visible", "Explored", "Objects", "ParentZone", "get_X", "get_Y"],
@@ -140,7 +146,104 @@ internal static class Queries
         ["XRL.World.Anatomy.BodyPart"] = ["Type", "Name", "Equipped", "Child", "Part"],
         ["XRL.World.Parts.ActivatedAbilities"] = ["List", "Get", "Ability"],
         ["XRL.UI.MessageQueue"] = ["Message", "Get"],
-        ["ConsoleLib.Console.Keyboard"] = ["get", "Key", "Input", "Push"],
+        ["ConsoleLib.Console.Keyboard"] = [],
+        // Types a play-capable read-only projection needs. XRL.UI.MessageQueue
+        // does not exist on this build; the message log is XRL.Messages.
+        ["XRL.Messages"] = ["Message", "Get", "Log", "Add", "Clear"],
+        ["Qud.UI.MessageLogLineData"] = [],
+        ["Qud.UI.MessageLogWindow"] = [],
+        ["ConsoleLib.Console.ScreenBuffer"] = [],
+        ["XRL.UI.Popup"] = ["Show", "Text", "Options", "Menu"],
+        ["XRL.World.Zone"] = ["Width", "Height", "GetCell", "Visible", "Explored", "ID", "Name"],
+        ["XRL.World.GameObject"] = ["DisplayName", "IsPlayer", "CurrentCell", "GetRenderString",
+            "Visible", "IsVisibleTo", "Blueprint", "GetBlueprint",
+            // Firing the game's own verb is how an action is performed, so the
+            // event surface belongs next to the read surface.
+            "FireEvent", "GetPart", "HasPart", "AddPart", "GetRenderString"],
+        ["XRL.The"] = ["Player", "Game"],
+        ["XRL.Core.XRLCore"] = ["Update", "LateUpdate", "Main", "RunGame", "Tick",
+            "Idle", "Wait", "Step", "WriteConsoleLine", "NewGame", "IsCoreThread",
+            "RegisterNewMessageLogEntryCallback", "CallNewMessageLogEntryCallbacks"],
+
+        // The blocking surfaces. Every method here waits for a key, which is why
+        // the mod suppresses rather than drives them. Kept together and named,
+        // because the set is the thing that has to stay complete: two of these
+        // were ungated for a long time and the game sat on a dialog nobody could
+        // dismiss. The list of waiting methods is the fact worth publishing.
+        ["XRL.UI.Popup"] = ["Show", "ShowFail", "ShowBlock", "ShowBlockPrompt",
+            "ShowBlockSpace", "ShowBlockWithCopy", "ShowSpace", "PickOption",
+            "Suppress", "Transform", "WaitNewPopupMessage", "NewPopupMessageAsync"],
+
+        // Conversations and menus. PickOption is options-in, index-out, so it is
+        // the generic menu shape; the observation publishes its options verbatim
+        // and the answer supplies the index.
+        ["XRL.UI.ConversationUI"] = ["HaveConversation", "Select", "CurrentChoices",
+            "CurrentConversation", "Input", "Render"],
+        ["XRL.World.Conversations.Conversation"] = ["GetDisplayText", "Value"],
+        ["XRL.World.Conversations.ConversationChoice"] = ["GetDisplayText", "Value"],
+
+        // Quest state, read rather than drawn. CmdQuests pushes the QuestLog
+        // screen and a pushed screen blocks on a keypress.
+        ["XRL.World.Quest"] = ["ID", "DisplayName", "StepsByID", "ShowStartPopup",
+            "ShowFailPopup", "ShowFailStepPopup", "ShowFinishPopup",
+            "ShowFinishStepPopup", "BonusAtLevel", "ReadyToTurnIn"],
+        ["XRL.World.QuestStep"] = ["ID", "Name", "Text", "Finished", "Ordinal", "Collapse"],
+        ["XRL.UI.QuestLog"] = ["GetLinesForQuest"],
+        ["XRL.XRLGame"] = ["Quests", "FinishedQuests", "Turns", "Messages"],
+
+        // A backed-array map, not a dictionary. It declares IDictionary<string,T>
+        // but enumerates through a struct enumerator, so a plain foreach yields
+        // nothing and a cast to the non-generic interface throws. Reading it
+        // correctly is the difference between an empty list and the real one.
+        ["XRL.Collections.StringMap`1"] = ["Count", "Item", "ContainsKey", "GetEnumerator",
+            "Values", "Keys", "TryGetValue"],
+
+        // Equipment: a query and a verb, with no picker in between.
+        ["XRL.World.Parts.Inventory"] = ["GetEquipmentListForSlot", "GetObjectsReadonly",
+            "GetObjects", "GetInventoryObjectList"],
+        ["XRL.World.Anatomy.BodyPart"] = ["Type", "Name", "Equipped", "Primary",
+            "GetOrdinalName", "Child", "Part"],
+        ["XRL.World.Anatomy.BodyPartType"] = ["Type", "Name", "Ordinal"],
+        ["XRL.World.Parts.Body"] = ["GetParts", "GetPart", "GetBody"],
+
+        // Console markup. Strip is what removes tags; Transform renders them and
+        // is not the same operation, which is worth recording because the two read
+        // alike and only one of them answers "what does the player see".
+        ["ConsoleLib.Console.Markup"] = ["Strip", "Transform"],
+        ["ConsoleLib.Console.MarkupNode"] = ["Name"],
+
+        // The browsable windows. A third shape: not a question, and nothing to
+        // intercept, so the honest route is reading the model they would draw.
+        ["XRL.UI.Screens"] = ["Show", "ShowPopup", "CurrentScreen"],
+        ["XRL.UI.InventoryScreen"] = ["Show", "EquipmentList"],
+        ["XRL.UI.EquipmentScreen"] = ["Show", "ShowBodypartEquipUI", "EquipmentList"],
+
+        // Events, because firing the game's own verb is how an action is performed
+        // rather than simulated.
+        ["XRL.World.Event"] = ["SetParameter", "GetParameter", "GetStringParameter"],
+        ["XRL.World.Parts.ConversationScript"] = ["AttemptConversation", "GetActiveConversationBlueprint"],
+
+        // The embark gate. Skipping this screen is what keeps world generation off
+        // the UI thread; its base type is worth publishing alongside it because the
+        // skip is only safe while Show is cosmetic.
+        ["Qud.UI.WorldGenerationScreen"] = ["Show"],
+        ["Qud.UI.SingletonWindowBase"] = ["Show"],
+
+        // Types that appear in a patch's own parameter list rather than as its
+        // target. A reader reconstructing a HarmonyPatch needs these: choosing the
+        // wrong one of two same-named types is how a signature silently fails to
+        // bind, and the whole assembly's patches then go unapplied.
+        ["XRL.UI.DialogResult"] = ["Yes", "No", "Cancel"],
+        ["Genkit.Location2D"] = [],
+        ["XRL.World.Anatomy.BodyPartType"] = ["Type", "Name", "Ordinal"],
+        ["ConsoleLib.Console.KeyCode"] = [],
+        ["ConsoleLib.Console.Keys"] = ["Space", "Enter", "Escape"],
+        // Two same-named types in different namespaces, which is precisely why
+        // they are here: a patch binding IRenderable when the game declared
+        // ConsoleLib.Console.IRenderable fails to resolve, and takes every other
+        // patch in the assembly with it.
+        ["ConsoleLib.Console.IRenderable"] = [],
+        ["ConsoleLib.Console.Renderable"] = ["GetRenderString"],
     };
 }
 

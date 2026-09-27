@@ -1,0 +1,171 @@
+{
+  "$defs": {
+    "HookEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "available": {
+          "title": "Available",
+          "type": "boolean"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Id"
+        },
+        "detail": {
+          "default": "",
+          "maxLength": 512,
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "available"
+      ],
+      "title": "HookEvidence",
+      "type": "object"
+    },
+    "ModReference": {
+      "additionalProperties": false,
+      "properties": {
+        "mod_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Mod Id",
+          "type": "string"
+        },
+        "load_order": {
+          "minimum": 0,
+          "title": "Load Order",
+          "type": "integer"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "active": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active"
+        },
+        "enabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Enabled"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "State"
+        }
+      },
+      "required": [
+        "mod_id",
+        "load_order"
+      ],
+      "title": "ModReference",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "qudgym-compat/1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "game_build": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Game Build",
+      "type": "string"
+    },
+    "profile": {
+      "const": "dedicated-test",
+      "title": "Profile",
+      "type": "string"
+    },
+    "enabled_mods": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ModReference"
+      },
+      "maxItems": 256,
+      "title": "Enabled Mods",
+      "type": "array"
+    },
+    "hooks": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/HookEvidence"
+      },
+      "maxItems": 128,
+      "title": "Hooks",
+      "type": "array"
+    },
+    "notes": {
+      "default": [],
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "game_build",
+    "profile"
+  ],
+  "title": "DiagnosticReport",
+  "type": "object"
+}

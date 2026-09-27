@@ -16,7 +16,8 @@
             "answer",
             "interact",
             "ability",
-            "inventory"
+            "inventory",
+            "info"
           ],
           "title": "Kind",
           "type": "string"
@@ -150,12 +151,31 @@
           ],
           "default": null
         },
+        "quests": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Quests",
+          "type": "array"
+        },
         "actions": {
           "items": {
             "$ref": "#/$defs/CandidateAction"
           },
           "title": "Actions",
           "type": "array"
+        },
+        "view": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ViewInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -202,6 +222,30 @@
           ],
           "default": null,
           "title": "Perceived Status"
+        },
+        "glyph": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Glyph"
+        },
+        "is_actor": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Is Actor"
         }
       },
       "required": [
@@ -260,6 +304,27 @@
         "text": {
           "title": "Text",
           "type": "string"
+        },
+        "options": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Options",
+          "type": "array"
+        },
+        "unavailable": {
+          "default": [],
+          "items": {
+            "type": "integer"
+          },
+          "title": "Unavailable",
+          "type": "array"
+        },
+        "allow_cancel": {
+          "default": false,
+          "title": "Allow Cancel",
+          "type": "boolean"
         }
       },
       "required": [
@@ -267,6 +332,34 @@
         "text"
       ],
       "title": "Prompt",
+      "type": "object"
+    },
+    "ViewInfo": {
+      "additionalProperties": false,
+      "description": "How much of the world the observation actually covers.\n\nA radius tells the agent the edge of what it can see, so a missing\nneighbour is not mistaken for the edge of the map.",
+      "properties": {
+        "radius": {
+          "minimum": 0,
+          "title": "Radius",
+          "type": "integer"
+        },
+        "zone_width": {
+          "minimum": 0,
+          "title": "Zone Width",
+          "type": "integer"
+        },
+        "zone_height": {
+          "minimum": 0,
+          "title": "Zone Height",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "radius",
+        "zone_width",
+        "zone_height"
+      ],
+      "title": "ViewInfo",
       "type": "object"
     }
   },

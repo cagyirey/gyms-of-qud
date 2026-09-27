@@ -1,0 +1,273 @@
+{
+  "$defs": {
+    "AssemblyDigest": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "bytes": {
+          "minimum": 0,
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "bytes",
+        "sha256"
+      ],
+      "title": "AssemblyDigest",
+      "type": "object"
+    },
+    "ModDigest": {
+      "additionalProperties": false,
+      "properties": {
+        "directory_name": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Directory Name",
+          "type": "string"
+        },
+        "ID": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "Title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "Version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "manifest_status": {
+          "anyOf": [
+            {
+              "const": "unreadable",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Manifest Status"
+        }
+      },
+      "required": [
+        "directory_name"
+      ],
+      "title": "ModDigest",
+      "type": "object"
+    },
+    "PlatformInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "system": {
+          "maxLength": 64,
+          "title": "System",
+          "type": "string"
+        },
+        "release": {
+          "maxLength": 128,
+          "title": "Release",
+          "type": "string"
+        },
+        "machine": {
+          "maxLength": 64,
+          "title": "Machine",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system",
+        "release",
+        "machine"
+      ],
+      "title": "PlatformInfo",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "manifest_version": {
+      "const": "0.1",
+      "title": "Manifest Version",
+      "type": "string"
+    },
+    "game_version": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Game Version"
+    },
+    "platform": {
+      "$ref": "#/$defs/PlatformInfo"
+    },
+    "assemblies": {
+      "items": {
+        "$ref": "#/$defs/AssemblyDigest"
+      },
+      "maxItems": 64,
+      "title": "Assemblies",
+      "type": "array"
+    },
+    "mods": {
+      "items": {
+        "$ref": "#/$defs/ModDigest"
+      },
+      "maxItems": 256,
+      "title": "Mods",
+      "type": "array"
+    },
+    "notes": {
+      "default": [],
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "manifest_version",
+    "platform",
+    "assemblies",
+    "mods"
+  ],
+  "title": "InstallManifest",
+  "type": "object"
+}
