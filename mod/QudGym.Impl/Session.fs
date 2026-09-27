@@ -2307,27 +2307,55 @@ module Session =
             match choice with
             | None -> fail requestId "no_option" "answer requires an option number"
             | Some n ->
+                // Bound to the open prompt, and only the first delivery counts.
+                //
+                // This used to take any positive number, ignore the option count and
+                // the refused set, discard the result of TrySetResult, and report
+                // success anyway -- so it could say "answered" for a prompt that had
+                // already been answered, and it carried no prompt identity, so a late
+                // answer could land on a newer question. The decision cursor is the
+                // identity: the same one step uses, so there is one admission path
+                // rather than a prompt-shaped hole beside it.
+                let mutable failure = "no_prompt", "No prompt is waiting for an answer"
                 let delivered =
                     lock gate (fun () ->
-                        if awaitingAnswer then
-                            // 0 and below mean cancel. Only offered when the game
-                            // permits it, so a prompt that forbids escape cannot be
-                            // talked out of; -1 is the value the game itself returns
-                            // for a cancelled menu.
-                            if n <= 0 then
-                                if offerCancellable then
-                                    answerArrived.TrySetResult -1 |> ignore
-                                    true
-                                else false
+                        if not awaitingAnswer then
+                            failure <- "no_prompt", "No prompt is waiting for an answer"
+                            false
+                        elif not (Array.contains n (answerNumbers offeredOptions offeredAcceptable offerCancellable)) then
+                            // Includes the refused choices, the out-of-range ones,
+                            // and a cancel the game does not permit.
+                            failure <-
+                                if n <= 0 then
+                                    "no_cancel", "This prompt cannot be cancelled"
+                                else
+                                    "invalid_option",
+                                        sprintf
+                                            "The game is not offering option %d of %d; refused %s"
+                                            n
+                                            offeredOptions.Length
+                                            (if offeredAcceptable.Length = 0 then
+                                                "none recorded"
+                                             else
+                                                String.Join(",", [ for i in 0 .. offeredAcceptable.Length - 1 do
+                                                                    if not offeredAcceptable.[i] then
+                                                                        string (i + 1) ]))
+                            false
+                        else
+                            // -1 is the game's own value for a cancelled menu.
+                            let index = if n <= 0 then -1 else n - 1
+                            // TrySetResult's answer is the only evidence the answer
+                            // arrived. Discarding it reported success for a delivery
+                            // that had already happened.
+                            if answerArrived.TrySetResult index then true
                             else
-                                answerArrived.TrySetResult (n - 1) |> ignore
-                                true
-                        else false)
+                                failure <-
+                                    "already_answered", "That prompt was already answered"
+                                false)
                 if delivered then ok requestId (sprintf "{\"answered\":%d}" n)
                 else
-                    fail requestId
-                        "no_prompt"
-                        (if n <= 0 then "This prompt cannot be cancelled" else "No prompt is waiting for an answer")
+                    let code, message = failure
+                    fail requestId code message
         | "hello" -> ok requestId (capabilities ())
         | "reset" ->
             match findInt "seed" body with
