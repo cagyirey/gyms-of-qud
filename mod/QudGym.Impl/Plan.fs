@@ -33,7 +33,9 @@ module Plan =
     /// once, is the fix.
     type View =
         { Player: obj
-          Nearby: string list }
+          Nearby: string list
+          /// Published absolute positions, as the observation reports them.
+          Entities: (string * int * int) list }
 
     /// A predicate over the live world, evaluated on the game thread.
     type Test = View -> bool
@@ -41,6 +43,12 @@ module Plan =
     type Plan =
         /// Act. The guard, when present, must hold or the step is skipped.
         | Act of action: string * guard: Test option
+        /// Ask the game to walk to a named object's published position.
+        ///
+        /// The game's own pathfinder does the walking, via AutoAct. Re-issued
+        /// each turn until adjacent, so an interrupted autopilot resumes rather
+        /// than leaving the plan stuck.
+        | Steer of name: string
         /// If the test holds take the first plan, otherwise the second.
         | Branch of test: Test * whenTrue: Plan * whenFalse: Plan option
         /// Repeat the body until the test holds, or the limit is reached.
@@ -69,6 +77,7 @@ module Plan =
     let rec actions (plan: Plan) : string list =
         match plan with
         | Act(a, _) -> [ a ]
+        | Steer n -> [ "steer:" + n ]
         | Branch(_, a, b) -> actions a @ (match b with Some x -> actions x | None -> [])
         | Repeat(_, body, _) -> actions body
         | All ps -> List.concat (List.map actions ps)
@@ -129,6 +138,27 @@ module Plan =
     let seesHere name : Test =
         fun v -> sees 0 name v
 
+    /// The named object is within one cell, i.e. close enough to interact.
+    ///
+    /// This is the rule CmdTalk itself applies through GetCellFromDirection, and
+    /// getting it wrong is silent: a target three cells away is found, offered
+    /// as a conversation, and then correctly refused.
+    let adjacentTo (name: string) : Test =
+        fun v ->
+            let px, py = px v.Player, py v.Player
+            v.Entities
+            |> List.exists (fun (n, ex, ey) ->
+                not (String.IsNullOrEmpty n)
+                && n.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0
+                && System.Math.Max(System.Math.Abs(ex - px), System.Math.Abs(ey - py)) <= 1)
+
+    /// The first published position matching a name.
+    let private findEntity (v: View) (name: string) =
+        v.Entities
+        |> List.tryFind (fun (n, _, _) ->
+            not (String.IsNullOrEmpty n)
+            && n.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0)
+
     /// The rendered console has mentioned this text.
     ///
     /// Reads the live buffer, so a test cannot pass on a message the player
@@ -163,6 +193,9 @@ module Plan =
     /// Never true: an unconditional placeholder.
     let never : Test = fun _ -> false
 
+    /// Walk to a named object and stop next to it.
+    let goto (name: string) (limit: int) = Repeat(adjacentTo name, Steer name, limit)
+
     // -- execution ---------------------------------------------------------
 
     /// Advance the plan by at most one action.
@@ -174,7 +207,24 @@ module Plan =
     /// pushed, because a pushed-and-ignored action is indistinguishable from a
     /// successful one at the call site.
     let rec advance (available: string -> bool) (view: View) (plan: Plan) : Outcome =
+        advanceWith (fun _ -> ()) available view plan
+
+    and advanceWith (trace: string -> unit) (available: string -> bool) (view: View) (plan: Plan) : Outcome =
         match plan with
+        | Steer name ->
+            // Hand the walk to the game's own pathfinder.
+            //
+            // Steering one cell at a time was a second, worse pathing
+            // implementation sitting next to the game's: it walked into walls,
+            // could not use doors, and needed a step per cell. CmdMoveTo does
+            // this properly by setting AutoAct to "M<x>,<y>" and letting the
+            // game autopilot there, so that is what a plan asks for.
+            match findEntity view name with
+            | None -> Skipped(All [])
+            | Some (_, ex, ey) ->
+                let move = "move_to:" + string ex + "," + string ey
+                trace ("goto " + name + " -> " + move)
+                if available move then Stepped(move, All []) else Skipped(All [])
         | Act(action, guard) ->
             match guard with
             | Some g when not (g view) -> Skipped(All [])
@@ -182,19 +232,20 @@ module Plan =
                 if available action then Stepped(action, All [])
                 else Unsupported(action, All [])
         | Branch(test, whenTrue, whenFalse) ->
-            if test view then advance available view whenTrue
+            if test view then advanceWith trace available view whenTrue
             else
                 match whenFalse with
-                | Some o -> advance available view o
+                | Some o -> advanceWith trace available view o
                 | None -> Finished
         | Repeat(untilTest, body, limit) ->
             let rest = Repeat(untilTest, body, limit - 1)
+            trace ("repeat until=" + string (untilTest view) + " limit=" + string limit)
             if untilTest view then Finished
             elif limit <= 0 then Exhausted(All [])
             else
                 // One action per turn: take the body's first step, and put the
                 // whole repeat back for the next turn.
-                match advance available view body with
+                match advanceWith trace available view body with
                 | Stepped(a, _) -> Stepped(a, rest)
                 | Skipped _ -> Skipped(rest)
                 | Unsupported(a, _) -> Unsupported(a, rest)
@@ -202,13 +253,18 @@ module Plan =
                 | Exhausted _ -> Exhausted(rest)
         | All [] -> Finished
         | All (p :: tailPlan) ->
-            let rest = All tailPlan
-            match advance available view p with
-            | Stepped(a, _) -> Stepped(a, rest)
-            | Skipped _ -> Skipped(rest)
-            | Unsupported(a, _) -> Unsupported(a, rest)
-            | Finished -> advance available view rest
-            | Exhausted _ -> advance available view rest
+            // The continuation a sub-plan returns must be spliced back in front
+            // of the tail. Dropping it abandoned a Repeat after one iteration,
+            // because the repeat hands back "the whole repeat again" and that
+            // was being thrown away in favour of the tail -- so a goto walked
+            // one step and then ran whatever came next.
+            let resume cont = All(cont :: tailPlan)
+            match advanceWith trace available view p with
+            | Stepped(a, cont) -> Stepped(a, resume cont)
+            | Skipped cont -> Skipped(resume cont)
+            | Unsupported(a, cont) -> Unsupported(a, resume cont)
+            | Finished -> advanceWith trace available view (All tailPlan)
+            | Exhausted _ -> advanceWith trace available view (All tailPlan)
 
     // -- a writable syntax ------------------------------------------------
 
@@ -245,6 +301,18 @@ module Plan =
             |> Array.choose (fun raw ->
                 let line = raw.Trim()
                 if line = "" || line.StartsWith("#") then None
+                elif line.StartsWith("goto ", StringComparison.Ordinal) then
+                    // Walk to a named object and stop beside it. The step is a
+                    // Steer resolved from the observation's published
+                    // coordinates, so the walk uses no pathing of its own.
+                    let rest = line.Substring(5).Trim()
+                    if rest = "" then failwith "goto needs a name"
+                    let name, limit =
+                        match rest.Split([| ' ' |], StringSplitOptions.RemoveEmptyEntries) with
+                        | [| n |] -> n, 200
+                        | [| n; k |] -> n, int k
+                        | _ -> failwithf "goto takes a name and an optional step limit: %s" line
+                    Some(goto name limit)
                 elif line.StartsWith("if ", StringComparison.Ordinal) then
                     let body = line.Substring(3).Trim()
                     let marker = " then "

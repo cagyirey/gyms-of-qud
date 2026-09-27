@@ -669,6 +669,210 @@ module Session =
                     read "X", read "Y"
         with _ -> (unknownPos, unknownPos)
 
+
+    /// Find a named object within `maxRing` cells, ring 0 being the player's own
+    /// cell. findEntityNamed walks the whole view radius, which is right for
+    /// targeting but wrong for conversation: CmdTalk only speaks to an object in
+    /// an adjacent cell, so a target three cells away was found and then
+    /// correctly refused by AttemptConversation.
+    let private findEntityWithin (player: obj) (name: string) (maxRing: int) =
+        let cell = memberValue player "CurrentCell"
+        let zone = memberValue cell "ParentZone"
+        let x0 = asInt (memberValue cell "X")
+        let y0 = asInt (memberValue cell "Y")
+        let mutable found = null
+        let mutable ring = 0
+        while isNull found && ring <= maxRing do
+            for dy in -ring .. ring do
+                for dx in -ring .. ring do
+                    if isNull found && (System.Math.Abs(dx) = ring || System.Math.Abs(dy) = ring) then
+                        let c =
+                            try call zone "GetCell" [| box (x0 + dx); box (y0 + dy) |]
+                            with _ -> null
+                        if not (isNull c) && visible c then
+                            let objs = objectsIn c
+                            if not (isNull objs) then
+                                for o in objs do
+                                    if isNull found && not (isNull o) then
+                                        let n =
+                                            try
+                                                match memberValue o "DisplayName" with
+                                                | :? string as s -> s
+                                                | _ -> ""
+                                            with _ -> ""
+                                        if n.Equals(name, StringComparison.OrdinalIgnoreCase) then found <- o
+            ring <- ring + 1
+        found
+
+    let private gameAssembly () =
+        AppDomain.CurrentDomain.GetAssemblies()
+        |> Array.find (fun a -> a.GetName().Name = "Assembly-CSharp")
+
+    /// Start a conversation with a target, using the game's own entry point.
+    ///
+    /// CmdTalk cannot be driven for this. It ignores its argument entirely and
+    /// calls PickDirection.ShowPicker, which loops on Keyboard.getvk waiting for
+    /// a human keypress; everything it does after the picker is the game's own
+    /// conversation path, reached through ConversationScript.AttemptConversation.
+    /// So this resolves the target the picker would have asked for and calls that
+    /// same method.
+    ///
+    /// Not silent, deliberately. CmdTalk tries AttemptConversation(Silent: true)
+    /// first and only shows the conversation when that returns false, so asking
+    /// the watervine farmer a question produced no output at all and looked
+    /// like a no-op rather than a suppressed conversation.
+    let private say (m: string) =
+        if logPath <> "" then Probe.record logPath ("talk: " + m) |> ignore
+
+    let private show (v: obj) =
+        if isNull v then "(null)" else v.ToString()
+
+    let private attemptConversation (target: obj) =
+        try
+            let partType = (gameAssembly ()).GetType("XRL.World.Parts.ConversationScript", false)
+            if isNull partType then say "no ConversationScript type"; false
+            else
+                let getter =
+                    target.GetType().GetMethods(BindingFlags.Instance ||| BindingFlags.Public)
+                    |> Array.tryFind (fun m ->
+                        m.Name = "GetPart" && m.IsGenericMethodDefinition
+                        && m.GetParameters().Length = 0)
+                match getter with
+                | None -> say "no GetPart<T>() on GameObject"; false
+                | Some g ->
+                    let part = g.MakeGenericMethod(partType).Invoke(target, [||])
+                    if isNull part then
+                        say ("target has no ConversationScript: " + show (memberValue target "DisplayName"))
+                        false
+                    else
+                        let talk =
+                            part.GetType().GetMethod("AttemptConversation", BindingFlags.Instance ||| BindingFlags.Public)
+                        if isNull talk then say "no AttemptConversation"; false
+                        else
+                            // AttemptConversation(bool Silent, bool? Mental, IEvent ParentEvent)
+                            let args =
+                                [| box false; (box null :> obj); (box null :> obj) |]
+                            if talk.GetParameters().Length <> 3 then
+                                say ("AttemptConversation arity " + string (talk.GetParameters().Length))
+                                false
+                            else
+                                let outcome = talk.Invoke(part, args)
+                                say ("AttemptConversation returned " + show outcome)
+                                match outcome with
+                                | :? bool as ok -> ok
+                                | _ -> true
+        with ex ->
+            say ("threw " + ex.GetBaseException().Message)
+            false
+
+    /// Actions the harness performs itself rather than pushing as a key command.
+    ///
+    /// Returns Some verb when the action was carried out here, so the caller
+    /// pushes that verb instead of the action's own. Only conversations need
+    /// this: every other intent verb resolves to a real Cmd* the game already
+    /// accepts.
+    /// Ask the game for the next step toward a cell, using its own pathfinder.
+    ///
+    /// AutoAct.TryFindPathStep is the game's real navigation: it uses nav
+    /// weights, doors and terrain, and it caches the path. Setting
+    /// AutoAct.Setting instead -- which is what CmdMoveTo does -- only marks the
+    /// autopilot as walking, and a non-empty PlayerWalking actually *blocks*
+    /// player movement, so nothing happened and the plan sat there re-issuing the
+    /// request. Steering one cell at a time by dominant axis was the opposite
+    /// mistake: a second, worse pathfinder next to the game's.
+    ///
+    /// Returns the game's own direction name, or None when it has no route.
+    let private pathStepTo (player: obj) (tx: int) (ty: int) =
+        try
+            let cell = memberValue player "CurrentCell"
+            let zone = memberValue cell "ParentZone"
+            let target = call zone "GetCell" [| box tx; box ty |]
+            if isNull target then None
+            else
+                let autoAct =
+                    (gameAssembly ()).GetType("XRL.World.Capabilities.AutoAct", false)
+                if isNull autoAct then None
+                else
+                    let m =
+                        autoAct.GetMethod(
+                            "TryFindPathStep",
+                            BindingFlags.Static ||| BindingFlags.Public)
+                    if isNull m then None
+                    else
+                        let args = [| box target; box null |]
+                        let found = m.Invoke(null, args)
+                        match found, args.[1] with
+                        | :? bool as ok, (:? string as step) when ok && step <> "." && step <> "" ->
+                            Some step
+                        | _ -> None
+        with _ -> None
+
+    /// The game's direction name to the CmdMove verb that performs it.
+    /// The game's step code to the CmdMove verb that performs it.
+    ///
+    /// The codes are the short uppercase forms the pathfinder actually emits --
+    /// "NE", not "northeast". Matching only the long names made every real step
+    /// unresolvable, and the plan sat there reporting "no verb" for a step the
+    /// game had already computed correctly.
+    let private moveVerbFor (step: string) =
+        let code = step.Trim().ToUpperInvariant()
+        let direct =
+            match code with
+            | "N" -> "CmdMoveN"
+            | "S" -> "CmdMoveS"
+            | "E" -> "CmdMoveE"
+            | "W" -> "CmdMoveW"
+            | "NE" -> "CmdMoveNE"
+            | "NW" -> "CmdMoveNW"
+            | "SE" -> "CmdMoveSE"
+            | "SW" -> "CmdMoveSW"
+            | _ -> ""
+        if direct <> "" then Some direct
+        else
+        let s = step.ToLowerInvariant()
+        if s.Contains("north") && s.Contains("east") then Some "CmdMoveNE"
+        elif s.Contains("north") && s.Contains("west") then Some "CmdMoveNW"
+        elif s.Contains("south") && s.Contains("east") then Some "CmdMoveSE"
+        elif s.Contains("south") && s.Contains("west") then Some "CmdMoveSW"
+        elif s.Contains("north") then Some "CmdMoveN"
+        elif s.Contains("south") then Some "CmdMoveS"
+        elif s.Contains("east") then Some "CmdMoveE"
+        elif s.Contains("west") then Some "CmdMoveW"
+        else None
+
+    let private tryDirect (player: obj) (action: string) =
+        if action.StartsWith("move_to:") then
+            // One step of the game's own route, requested fresh each turn.
+            let parts = action.Substring(8).Split(',')
+            if parts.Length <> 2 then None
+            else
+                try
+                    let tx, ty = int (parts.[0].Trim()), int (parts.[1].Trim())
+                    match pathStepTo player tx ty with
+                    | Some step ->
+                        match moveVerbFor step with
+                        | Some verb -> Some(verb, box null)
+                        | None ->
+                            say ("no verb for step '" + step + "'")
+                            None
+                    | None -> say ("no route to " + string tx + "," + string ty); None
+                with _ -> None
+        else if action.StartsWith("talk:") then
+            let name = action.Substring(5)
+            // Adjacent only, matching CmdTalk's own rule via GetCellFromDirection.
+            match findEntityWithin player name 1 with
+            | null ->
+                say ("no '" + name + "' in an adjacent cell")
+                None
+            | target ->
+                if attemptConversation target then Some("CmdNone", box null)
+                else
+                    // Report the failure rather than falling through silently:
+                    // a no-op conversation is indistinguishable from a no-op move.
+                    say ("no conversation started for " + name + "; falling through to CmdTalk")
+                    None
+        else None
+
     let private commandOf (action: string) (player: obj) =
         if action = "wait" then Some("CmdWait", box null)
         elif action = "look" then Some("CmdLook", box null)
@@ -723,7 +927,10 @@ module Session =
                 match currentPlan with
                 | None -> None
                 | Some p ->
-                    let available a = commandOf a player |> Option.isSome
+                    let available a =
+                        (match tryDirect player a with
+                         | Some _ -> true
+                         | None -> commandOf a player |> Option.isSome)
                     // Gather the view the plan's tests read, from the same
                     // entity walk the observation publishes, so a plan and the
                     // observation beside it can never disagree about what is
@@ -731,16 +938,27 @@ module Session =
                     let view =
                         try
                             let cell = memberValue player "CurrentCell"
-                            if isNull cell then { Plan.Player = player; Plan.Nearby = [] }
+                            if isNull cell then
+                                { Plan.Player = player; Plan.Nearby = []; Plan.Entities = [] }
                             else
                                 let cx, cy, _, zone, _, _ = window cell
-                                let names =
+                                // Absolute positions, exactly as the
+                                // observation publishes them, so a plan
+                                // targets from the same coordinates a reader
+                                // sees rather than from a fresh sweep.
+                                let located =
                                     entityEntries player zone cx cy
-                                    |> Seq.map (fun (name, _, _, _, _, _, _) -> name)
+                                    |> Seq.map (fun (name, _, dx, dy, _, _, _) ->
+                                        (name, cx + dx, cy + dy))
                                     |> List.ofSeq
-                                    |> List.distinct
-                                { Plan.Player = player; Plan.Nearby = names }
-                        with _ -> { Plan.Player = player; Plan.Nearby = [] }
+                                let names = located |> List.map (fun (n, _, _) -> n) |> List.distinct
+                                { Plan.Player = player
+                                  Plan.Nearby = names
+                                  Plan.Entities = located }
+                        with _ ->
+                            { Plan.Player = player
+                              Plan.Nearby = []
+                              Plan.Entities = [] }
                     // Trace the decision, including what the available check
                     // said about each action, before advancing.
                     let offered =
@@ -749,7 +967,7 @@ module Session =
                         | Plan.All (Plan.Branch(_, Plan.Act(a, _), _) :: _) -> a
                         | _ -> "(non-Act head)"
                     let av = available offered
-                    match Plan.advance available view p with
+                    match Plan.advanceWith say available view p with
                     | Plan.Stepped(action, rest) ->
                         lock gate (fun () ->
                             planSteps <- planSteps + 1
@@ -792,13 +1010,22 @@ module Session =
             | Some slot, _, _ ->
                 lock gate (fun () -> slot.Consumed <- true)
                 let actionId = slot.Action.Value
-                result <- commandOf actionId player
+                result <-
+                    match tryDirect player actionId with
+                    | Some v -> Some v
+                    | None -> commandOf actionId player
                 if result.IsNone then lock gate (fun () -> rejected <- rejected + 1)
             | None, Some actionId, _ ->
-                result <- commandOf actionId player
+                result <-
+                    match tryDirect player actionId with
+                    | Some v -> Some v
+                    | None -> commandOf actionId player
                 if result.IsNone then lock gate (fun () -> rejected <- rejected + 1)
             | None, None, Some actionId ->
-                result <- commandOf actionId player
+                result <-
+                    match tryDirect player actionId with
+                    | Some v -> Some v
+                    | None -> commandOf actionId player
                 if result.IsNone then lock gate (fun () -> rejected <- rejected + 1)
             | None, None, None ->
                 if lock gate (fun () -> cancelled) then
