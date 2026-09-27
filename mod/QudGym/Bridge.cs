@@ -206,6 +206,25 @@ static class QudGymBridge
         }
     }
 
+    /// Put a line into the game's own message log.
+    ///
+    /// Goes through the game's logging path rather than a private buffer, so a
+    /// line added here is a line the player would have seen -- it reaches the
+    /// console, the history command and the mod's own log subscription alike.
+    public static void LogMessage(string text)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(text))
+                return;
+            XRL.Core.XRLCore.CallNewMessageLogEntryCallbacks(text);
+        }
+        catch (Exception ex)
+        {
+            Note("log message failed " + ex.GetBaseException().Message);
+        }
+    }
+
     public static void Note(string what)
     {
         Write(what);

@@ -145,3 +145,58 @@ static class ConversationPopupHook
         }
     }
 }
+
+// A notification that only waits to be dismissed belongs in the log, not in
+// front of the player.
+//
+// Popup.ShowSpace blocks until a key is pressed, and PushKey is refused while a
+// popup is showing -- TutorialManager.AllowPushKey returns false whenever
+// ShowingPopup -- so a harness cannot dismiss one by pushing the very key it
+// asks for. Granting a quest is exactly this: a dialog saying so, waiting for
+// space, with nothing to decide.
+//
+// So it is logged and skipped. The game's own logging path is used, so the line
+// reaches the console, the history command and the mod's log subscription, and
+// then the popup never opens. Dialogs that ask a question are untouched:
+// ShowConversation still publishes its options and waits for an answer.
+[HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowSpace),
+    new System.Type[] { typeof(string), typeof(string), typeof(string),
+                        typeof(ConsoleLib.Console.Renderable), typeof(bool),
+                        typeof(bool), typeof(string) })]
+static class NotificationSpaceGate
+{
+    static bool Prefix(string Message)
+    {
+        try
+        {
+            QudGymBridge.LogMessage(Message);
+            return false;
+        }
+        catch (System.Exception ex)
+        {
+            QudGymBridge.Note("notification gate failed " + ex.GetBaseException().Message);
+            return true;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowBlockSpace),
+    new System.Type[] { typeof(string), typeof(string), typeof(bool), typeof(bool),
+                        typeof(ConsoleLib.Console.IRenderable), typeof(bool),
+                        typeof(bool), typeof(bool), typeof(bool) })]
+static class NotificationBlockSpaceGate
+{
+    static bool Prefix(string Message, string Prompt)
+    {
+        try
+        {
+            QudGymBridge.LogMessage(string.IsNullOrEmpty(Prompt) ? Message : Message + " " + Prompt);
+            return false;
+        }
+        catch (System.Exception ex)
+        {
+            QudGymBridge.Note("block notification gate failed " + ex.GetBaseException().Message);
+            return true;
+        }
+    }
+}
