@@ -183,7 +183,7 @@ static class NotificationSpaceGate
 [HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowBlockSpace),
     new System.Type[] { typeof(string), typeof(string), typeof(bool), typeof(bool),
                         typeof(ConsoleLib.Console.IRenderable), typeof(bool),
-                        typeof(bool), typeof(bool), typeof(bool) })]
+                        typeof(bool), typeof(bool) })]
 static class NotificationBlockSpaceGate
 {
     static bool Prefix(string Message, string Prompt)
