@@ -23,8 +23,20 @@ open System
 /// thread.
 module Plan =
 
+    /// What a test may look at, gathered once per decision boundary.
+    ///
+    /// Nearby is the same list the observation publishes, not a second walk of
+    /// the zone. A plan that re-derived "what is near me" by its own reflection
+    /// returned an empty list, so every guarded step was permanently false and
+    /// the plan could never advance past it -- while the observation beside it
+    /// listed the very object the guard was looking for. One source, gathered
+    /// once, is the fix.
+    type View =
+        { Player: obj
+          Nearby: string list }
+
     /// A predicate over the live world, evaluated on the game thread.
-    type Test = obj -> bool
+    type Test = View -> bool
 
     type Plan =
         /// Act. The guard, when present, must hold or the step is skipped.
@@ -91,62 +103,31 @@ module Plan =
     /// uninteractable wall does not satisfy a test for a target. That is the
     /// difference between "there is a watervine here" and "there are
     /// brinestalk walls here", which a name heuristic would confuse.
-    let private namesWithin (player: obj) (r: int) : string list =
-        try
-            let cell = cellOf player
-            if isNull cell then []
-            else
-                let zone = prop cell "ParentZone"
-                if isNull zone then []
-                else
-                    let cx, cy = px player, py player
-                    let t = zone.GetType()
-                    let flags = Reflection.BindingFlags.Instance
-                               ||| Reflection.BindingFlags.Public
-                    let getReal = t.GetMethod("GetRealNonSceneryObjects", flags)
-                    if isNull getReal then []
-                    else
-                        [ for dy in -r .. r do
-                              for dx in -r .. r do
-                                  let cc = t.GetMethod("GetCell", flags)
-                                  if not (isNull cc) then
-                                      let target = cc.Invoke(zone, [| box (cx + dx); box (cy + dy) |])
-                                      match getReal.Invoke(zone, [| target |]) with
-                                      | :? System.Collections.IEnumerable as items ->
-                                          for it in items do
-                                              if not (isNull it) then
-                                                  let nm = prop it "DisplayName"
-                                                  if not (isNull nm) then
-                                                      let s = nm.ToString()
-                                                      if not (String.IsNullOrEmpty s) then yield s
-                                      | _ -> ()
-                                      yield! []
-                                  else
-                                      yield! [] ]
-                        |> List.distinct
-        with _ -> []
-
     // -- tests -------------------------------------------------------------
 
     /// The player stands on this cell.
-    let at (cx: int) (cy: int) : Test = fun p -> px p = cx && py p = cy
+    let at (cx: int) (cy: int) : Test = fun v -> px v.Player = cx && py v.Player = cy
 
     /// The player is within `r` cells, Chebyshev distance.
     let near (cx: int) (cy: int) (r: int) : Test =
-        fun p ->
-            let d = max (abs (px p - cx)) (abs (py p - cy))
+        fun v ->
+            let d = max (abs (px v.Player - cx)) (abs (py v.Player - cy))
             d >= 0 && d <= r
 
-    /// A named non-scenery object is within `r` cells.
-    let sees (r: int) (name: string) : Test =
-        fun p ->
-            if isNull p then false
-            else
-                namesWithin p r
-                |> List.exists (fun n -> n.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0)
+    /// A named object is in the published nearby list.
+    ///
+    /// The radius is accepted for readability at the call site but the list is
+    /// already bounded by the observation's own view, so it is not re-applied
+    /// here. Ignoring it would be wrong; re-deriving it is what broke.
+    let sees (_r: int) (name: string) : Test =
+        fun v ->
+            v.Nearby
+            |> List.exists (fun n -> not (String.IsNullOrEmpty n)
+                                   && n.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0)
 
-    /// A named non-scenery object is in the same cell as the player.
-    let seesHere name : Test = fun p -> sees 0 name p
+    /// A named object is in the same cell as the player.
+    let seesHere name : Test =
+        fun v -> sees 0 name v
 
     /// The rendered console has mentioned this text.
     ///
@@ -192,28 +173,28 @@ module Plan =
     /// action the world does not offer is reported as Unsupported rather than
     /// pushed, because a pushed-and-ignored action is indistinguishable from a
     /// successful one at the call site.
-    let rec advance (available: string -> bool) (player: obj) (plan: Plan) : Outcome =
+    let rec advance (available: string -> bool) (view: View) (plan: Plan) : Outcome =
         match plan with
         | Act(action, guard) ->
             match guard with
-            | Some g when not (g player) -> Skipped(All [])
+            | Some g when not (g view) -> Skipped(All [])
             | _ ->
                 if available action then Stepped(action, All [])
                 else Unsupported(action, All [])
         | Branch(test, whenTrue, whenFalse) ->
-            if test player then advance available player whenTrue
+            if test view then advance available view whenTrue
             else
                 match whenFalse with
-                | Some o -> advance available player o
+                | Some o -> advance available view o
                 | None -> Finished
         | Repeat(untilTest, body, limit) ->
             let rest = Repeat(untilTest, body, limit - 1)
-            if untilTest player then Finished
+            if untilTest view then Finished
             elif limit <= 0 then Exhausted(All [])
             else
                 // One action per turn: take the body's first step, and put the
                 // whole repeat back for the next turn.
-                match advance available player body with
+                match advance available view body with
                 | Stepped(a, _) -> Stepped(a, rest)
                 | Skipped _ -> Skipped(rest)
                 | Unsupported(a, _) -> Unsupported(a, rest)
@@ -222,12 +203,12 @@ module Plan =
         | All [] -> Finished
         | All (p :: tailPlan) ->
             let rest = All tailPlan
-            match advance available player p with
+            match advance available view p with
             | Stepped(a, _) -> Stepped(a, rest)
             | Skipped _ -> Skipped(rest)
             | Unsupported(a, _) -> Unsupported(a, rest)
-            | Finished -> advance available player rest
-            | Exhausted _ -> advance available player rest
+            | Finished -> advance available view rest
+            | Exhausted _ -> advance available view rest
 
     // -- a writable syntax ------------------------------------------------
 

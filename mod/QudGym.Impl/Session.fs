@@ -51,6 +51,10 @@ module Session =
     // it evaluates read the same live world the observation is built from.
     let mutable private currentPlan : Plan.Plan option = None
     let mutable private planNote = ""
+    // Which branch advance took last, and what it was asked to do. A plan
+    // that stops early is otherwise indistinguishable from a plan that
+    // finished, which is how a one-step run reported itself as finished.
+    let mutable private planTrace = ""
     let mutable private planSteps = 0
     // A reset that is waiting for its first boundary holds a claim but has not
     // consumed the episode, so a bounded timeout leaves the episode resettable.
@@ -670,28 +674,59 @@ module Session =
                 | None -> None
                 | Some p ->
                     let available a = commandOf a player |> Option.isSome
-                    match Plan.advance available player p with
+                    // Gather the view the plan's tests read, from the same
+                    // entity walk the observation publishes, so a plan and the
+                    // observation beside it can never disagree about what is
+                    // nearby.
+                    let view =
+                        try
+                            let cell = memberValue player "CurrentCell"
+                            if isNull cell then { Plan.Player = player; Plan.Nearby = [] }
+                            else
+                                let cx, cy, _, zone, _, _ = window cell
+                                let names =
+                                    entityEntries player zone cx cy
+                                    |> Seq.map (fun (name, _, _, _, _, _, _) -> name)
+                                    |> List.ofSeq
+                                    |> List.distinct
+                                { Plan.Player = player; Plan.Nearby = names }
+                        with _ -> { Plan.Player = player; Plan.Nearby = [] }
+                    // Trace the decision, including what the available check
+                    // said about each action, before advancing.
+                    let offered =
+                        match p with
+                        | Plan.All (Plan.Act(a, _) :: _) -> a
+                        | Plan.All (Plan.Branch(_, Plan.Act(a, _), _) :: _) -> a
+                        | _ -> "(non-Act head)"
+                    let av = available offered
+                    match Plan.advance available view p with
                     | Plan.Stepped(action, rest) ->
                         lock gate (fun () ->
                             planSteps <- planSteps + 1
-                            currentPlan <- Some rest)
+                            currentPlan <- Some rest
+                            planTrace <- "stepped " + action)
                         Some action
                     | Plan.Skipped rest ->
-                        lock gate (fun () -> currentPlan <- Some rest)
+                        lock gate (fun () ->
+                            currentPlan <- Some rest
+                            planTrace <- "skipped")
                         None
                     | Plan.Unsupported(action, rest) ->
                         lock gate (fun () ->
                             currentPlan <- None
+                            planTrace <- "unsupported " + action
                             planNote <- "unsupported action: " + action)
                         None
                     | Plan.Exhausted _ ->
                         lock gate (fun () ->
                             currentPlan <- None
+                            planTrace <- "exhausted"
                             planNote <- "repeat limit reached")
                         None
                     | Plan.Finished ->
                         lock gate (fun () ->
                             currentPlan <- None
+                            planTrace <- "finished"
                             planNote <- "plan finished")
                         None
             let fromQueue =
@@ -940,6 +975,7 @@ module Session =
                     lock gate (fun () ->
                         currentPlan <- Some parsed
                         planNote <- ""
+                        planTrace <- "submitted"
                         planSteps <- 0)
                     ok requestId
                         (sprintf
@@ -949,14 +985,20 @@ module Session =
                 with ex ->
                     fail requestId "bad_program" (ex.GetBaseException().Message)
         | "plan_status" ->
-            let running, steps, note =
-                lock gate (fun () -> currentPlan.IsSome, planSteps, planNote)
+            let running, steps, note, trace, pending =
+                lock gate (fun () ->
+                    currentPlan.IsSome, planSteps, planNote, planTrace,
+                    (match currentPlan with
+                     | Some p -> String.concat " | " (Plan.actions p)
+                     | None -> ""))
             ok requestId
                 (sprintf
-                    "{\"running\":%s,\"steps_taken\":%d,\"note\":%s}"
+                    "{\"running\":%s,\"steps_taken\":%d,\"note\":%s,\"trace\":%s,\"pending\":%s}"
                     (if running then "true" else "false")
                     steps
-                    (jsonString note))
+                    (jsonString note)
+                    (jsonString trace)
+                    (jsonString pending))
         | "snapshot" | "restore" | "release" | "state_hash" ->
             fail requestId "unsupported" "Live control does not expose snapshots or a full-state hash"
         | _ -> fail requestId "unsupported" "Unknown operation"
