@@ -552,6 +552,23 @@ module Session =
     ///
     /// The first nine options are the digit keys, which is how the game labels
     /// them; beyond that it switches to letters.
+    /// Push a named key through the game's own input queue.
+    let private pressNamedKey (name: string) =
+        try
+            let keyboard = (gameAssembly ()).GetType("ConsoleLib.Console.Keyboard", false)
+            let keyCode = (gameAssembly ()).GetType("UnityEngine.KeyCode", false)
+            let pushKey = keyboard.GetMethod("PushKey", [| keyCode |])
+            let field = keyCode.GetField(name, Reflection.BindingFlags.Static ||| Reflection.BindingFlags.Public)
+            if isNull pushKey || isNull field then
+                say ("no key named " + name)
+                false
+            else
+                pushKey.Invoke(null, [| field.GetValue(null) |]) |> ignore
+                true
+        with ex ->
+            say ("press " + name + " failed: " + ex.GetBaseException().Message)
+            false
+
     let private pressAnswerKey (index: int) =
         try
             let keyboard = (gameAssembly ()).GetType("ConsoleLib.Console.Keyboard", false)
@@ -992,6 +1009,16 @@ module Session =
                             None
                     | None -> say ("no route to " + string tx + "," + string ty); None
                 with _ -> None
+        else if action = "space" || action = "continue" then
+            // Dismiss a modal that is waiting for a keypress.
+            //
+            // Granting a quest shows a dialog that blocks on the keyboard until
+            // something is pressed, and a player presses space. Nothing in the
+            // harness sent one, so the game sat waiting and the quest looked
+            // unfinished -- the dialog, not the quest, was the blocker. Keyed
+            // actions go through the game's own input queue for the same reason
+            // conversation answers do.
+            if pressNamedKey "Space" then Some("CmdNone", box null) else None
         else if action.StartsWith("answer:") then
             let raw = action.Substring(7).Trim()
             match Int32.TryParse raw with

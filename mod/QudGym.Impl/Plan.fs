@@ -193,6 +193,9 @@ module Plan =
     /// Never true: an unconditional placeholder.
     let never : Test = fun _ -> false
 
+    /// Dismiss a modal that is waiting for a keypress.
+    let continue () = act "space"
+
     /// Walk to a named object and stop next to it.
     let goto (name: string) (limit: int) = Repeat(adjacentTo name, Steer name, limit)
 
