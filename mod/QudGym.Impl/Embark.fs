@@ -235,6 +235,21 @@ module Embark =
     /// The read-back is the point. A reflection call that finds nothing must not be
     /// assumed to have worked, and "the flag is set" is exactly the kind of claim
     /// that has been wrong here before.
+    /// Set the game's own notification flag, and report what it reads back.
+    ///
+    /// A reflection call that finds nothing must not be assumed to have worked, and
+    /// this is the flag that stands between the harness and a blocked dialog.
+    let private setPopupSuppress (value: bool) =
+        try
+            let popup = ty "XRL.UI.Popup"
+            match popup.GetField("Suppress", BindingFlags.Public ||| BindingFlags.Static) with
+            | null -> Probe.record logPath "popup Suppress field not found" |> ignore
+            | field ->
+                field.SetValue(null, box value)
+                let read = field.GetValue(null)
+                Probe.record logPath ("popup Suppress=" + (if isNull read then "?" else read.ToString())) |> ignore
+        with ex -> Probe.record logPath ("popup Suppress failed: " + (ex.GetBaseException().Message)) |> ignore
+
     let private handTurnToGameThread (path: string) (stage: string) =
         try
             let managerType = ty "GameManager"
@@ -512,10 +527,15 @@ module Embark =
                 Probe.record path ("embark modules " + String.Join(",", names)) |> ignore
                 suppressPopups <- true
                 try
+                    setPopupSuppress true
                     Probe.record path "embark boot" |> ignore
                     invoke "bootGame" [| game |] info |> ignore
                 finally
-                    suppressPopups <- false
+                    // Left set. bootGame is the one point where the whole world is
+                    // being built, and every notification raised from here on should
+                    // be logged rather than block a game nobody is watching. Clearing
+                    // it here would undo the generic answer immediately.
+                    setPopupSuppress true
                 let body =
                     match instanceValue "Player" game with
                     | null -> null
@@ -525,6 +545,24 @@ module Embark =
                 // Immediately before the loop that would use it, and reported
                 // again: prepare set it too, and the value did not survive to the
                 // first turn, so this second set is the one that counts.
+                // Notifications stop blocking, generically and for good.
+                //
+                // Eight of the game's sixteen public popups consult
+                // XRL.UI.Popup.Suppress, and the suppressed branch still logs through
+                // the game's own message path with its own wording, capitalisation
+                // and markup handling. So one flag covers every notification the game
+                // will raise -- including any nobody has found yet -- and there is no
+                // longer a set of notification methods to keep complete.
+                //
+                // What the flag does not cover is the eight that ignore it, and those
+                // are gated by name in PromptProbe.cs: the questions (PickOption is
+                // covered, but ShowConversation, ShowYesNo, ShowYesNoCancel,
+                // ShowBlockWithCopy and ShowFail are not) and some screen furniture.
+                // tests/test_popup_coverage.py fails if a public popup is neither
+                // covered by the flag nor gated by name, so that list stays honest
+                // without being a list of everything in the game.
+                suppressPopups <- true
+                Probe.record path "notifications suppressed" |> ignore
                 handTurnToGameThread path "rungame"
                 Probe.record path "embark rungame" |> ignore
                 invoke "RunGame" [||] core |> ignore

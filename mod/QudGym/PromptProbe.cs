@@ -281,6 +281,70 @@ static class NotificationBlockPromptGate
     static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
 }
 
+// Two more that do not honour Suppress, and so cannot be covered by the global flag.
+//
+// The flag is the generic answer: eight of the sixteen public popups consult
+// Popup.Suppress, so setting it once covers every notification the game will ever
+// raise, including ones nobody has found yet. What is left is the short list of
+// popups that ignore the flag, and these two appear in ordinary play -- ShowFail
+// is how the game says a trade will not happen, and ShowYesNoCancel is a three-way
+// confirmation. Both blocked.
+[HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowFail),
+    new System.Type[] { typeof(string), typeof(bool), typeof(bool), typeof(bool) })]
+static class ShowFailGate
+{
+    // ShowFail returns void and only reports that something could not be done. It
+    // is logged through the game's own message path so the reason is not lost, and
+    // it does not block.
+    static bool Prefix(string Message, bool Capitalize)
+    {
+        try
+        {
+            var text = (Message ?? "").Trim();
+            if (Capitalize && text.Length > 0)
+                text = char.ToUpperInvariant(text[0]) + text.Substring(1);
+            QudGymBridge.LogMessage(text);
+        }
+        catch (System.Exception)
+        {
+        }
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowYesNoCancel),
+    new System.Type[] { typeof(string), typeof(string), typeof(bool), typeof(XRL.UI.DialogResult) })]
+static class ShowYesNoCancelGate
+{
+    static bool Prefix(ref XRL.UI.DialogResult __result, string Message, bool AllowEscape,
+                       XRL.UI.DialogResult defaultResult)
+    {
+        try
+        {
+            var options = new[] { "Yes", "No", "Cancel" };
+            QudGymBridge.Note("yesnocancel '" + (Message ?? "") + "' escape=" + AllowEscape
+                + " default=" + defaultResult);
+            int chosen = QudGymBridge.MenuTurn("", Message ?? "", options, AllowEscape, -1, 120000);
+            var result = chosen switch
+            {
+                0 => XRL.UI.DialogResult.Yes,
+                1 => XRL.UI.DialogResult.No,
+                2 => XRL.UI.DialogResult.Cancel,
+                _ => defaultResult,
+            };
+            QudGymBridge.Note("yesnocancel chose " + result);
+            __result = result;
+            return false;
+        }
+        catch (System.Exception ex)
+        {
+            QudGymBridge.Note("yesnocancel gate failed " + ex.GetBaseException().Message);
+            __result = defaultResult;
+            return false;
+        }
+    }
+}
+
 [HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowBlockWithCopy),
     new System.Type[] { typeof(string), typeof(string), typeof(string),
                         typeof(string), typeof(bool) })]

@@ -60,7 +60,23 @@ module Session =
         member _.Observation = observation
 
     let private gate = obj ()
+    // Bounded, and it releases.
+    //
+    // Every reply was kept forever, keyed by request id, so a long session grew
+    // without limit for state that has already been handed over. A client that
+    // reconnects can still replay a recent request; an old one is answered from
+    // the log or simply not replayed, which is the honest failure.
     let private cache = Dictionary<string, string * string>()
+    let private cacheOrder = Queue<string>()
+    let private cacheLimit = 256
+    let private remember (requestId: string) (body: string) (response: string) =
+        lock gate (fun () ->
+            if not (cache.ContainsKey requestId) then (
+                cache.[requestId] <- (body, response)
+                cacheOrder.Enqueue requestId
+                while cacheOrder.Count > cacheLimit do
+                    let oldest = cacheOrder.Dequeue()
+                    cache.Remove oldest |> ignore))
 
     let mutable private waiting : Slot option = None
     let mutable private decisions = 0
@@ -1894,6 +1910,11 @@ module Session =
     let conversationTurn (player: obj) (turn: int) (timeoutMilliseconds: int) (title: string)
         (intro: string) (allowEscape: bool) (fallback: int) (options: string[]) (acceptable: bool[]) =
         let signal = TaskCompletionSource<int>()
+        // Whether this prompt ended without a controller behind it. A menu's
+        // default arriving because nobody replied is indistinguishable from a
+        // deliberate choice downstream, so it is recorded rather than passed off
+        // as an answer.
+        let mutable abandoned = false
         lock gate (fun () ->
             answerArrived <- signal
             awaitingAnswer <- true
@@ -2028,6 +2049,11 @@ module Session =
             // waiting client, and it is advanced exactly one action per turn so
             // the world is observed between steps.
             let promptOpen = lock gate (fun () -> awaitingAnswer)
+            // Cancellation is checked before any further action is taken, not only
+            // in the no-action arm. A client that disconnected while a plan was
+            // running used to be followed by the plan carrying on supplying
+            // actions to a game nobody was watching, indefinitely.
+            if lock gate (fun () -> cancelled) then running <- false
             let fromPlan =
                 if not running || promptOpen then None
                 else
@@ -2590,7 +2616,7 @@ module Session =
                     try handleOp requestId op body
                     with ex ->
                         fail requestId "internal_error" (ex.GetType().Name + ": " + ex.Message)
-                lock gate (fun () -> cache.[requestId] <- (body, response))
+                remember requestId body response
                 Some response
 
     let private same (left: string) (right: string) =
@@ -2602,7 +2628,15 @@ module Session =
 
     /// Release the turn thread from a wait. Called only from the transport
     /// thread; never touches game state.
-    let cancel () = lock gate (fun () -> cancelled <- true)
+    let cancel () =
+        lock gate (fun () ->
+            cancelled <- true
+            // Release a conversation waiting for an answer, or the game turn thread
+            // stays blocked on a prompt nobody will ever answer. cancel only set a
+            // flag the wait never looked at, so the one thread that cannot be
+            // abandoned was the one left hanging.
+            if awaitingAnswer then
+                answerArrived.TrySetResult -2 |> ignore)
 
     let private session (webSocket: WebSocket) (_context: HttpContext) =
         socket {
