@@ -210,3 +210,33 @@ assembly it cannot identify — so a report always names the build it describes.
 `tests/test_api_surface.py` fails when the report stops describing the code, when
 a patched type is missing from it, when a reflected type is missing, when a local
 path appears in it, or when it mixes assembly versions.
+
+## The quest's travel step is not a walk
+
+*What's Eating the Watervine?* asks for "two parasangs north of Joppa to Red
+Rock". That is not `goto`, and not `CmdMoveToPointOfInterest` either.
+
+- `CmdMoveToPointOfInterest` is for *nearby* named creatures and player-marked
+  objects. It reads `GetPointsOfInterestEvent.GetFor(The.Player)`, which admits a
+  cell only when it is `Explored` and holds a proper-named creature or something
+  the player marked important. Red Rock is neither, so it is not in that list.
+- There is no `MapScreen` or `WorldMap` class in the assembly. The only map
+  classes are `Overlay.MapEditor`, which is a development overlay.
+- Zone travel is therefore by **stairs**: `GameObject` tests
+  `HasObjectWithPart("StairsUp")` / `"StairsDown"` and compares
+  `parentZone.Z` against `currentZone.Z`. The zone level is `Z`, so "north" in the
+  quest's terms is a `Z` delta, and the world is walked rather than fast-travelled.
+
+So the missing primitive is a **zone transition by stairs**, and it is a fourth
+kind of surface, distinct from the three already handled:
+
+1. a question — intercept the call, publish the options, return an index
+2. a notification — `Popup.Suppress`
+3. a browsable window — read the model it would draw
+4. **a world transition** — the game's own stairs action, which rebuilds the zone
+
+The fourth has no interception point to hook and no model to read ahead of it. It
+has to be driven the way a player drives it, through the object's own action, and
+observed afterwards by what the new zone publishes. That is a materially different
+mechanism from anything in the harness today, which is why `goto` naming a
+distant place cannot work and must not be made to.
