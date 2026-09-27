@@ -540,45 +540,4 @@ module Embark =
         prepareEarly path
         boot path
 
-    /// Run a second episode in this process, from a decision boundary.
-    ///
-    /// A decision boundary is the one place this can be done safely: the core
-    /// thread is inside the game's own RunGame loop and the mod's IdleWait gate
-    /// is holding it there, so the game is quiescent and the core thread is ours
-    /// to use. prepareEarly's only guard is IsCoreThread, which holds here.
-    ///
-    /// `prepare` is already a full teardown, in the game's own order: Release the
-    /// old game, LoadEverything, ResetGameBasedStaticCaches, a new XRLGame,
-    /// CreateNewGame, Reset, and the game's own task queue cleared. So the second
-    /// world is the game's own new-game path rather than a mutation of the first,
-    /// and nothing here writes state back over what was there.
-    ///
-    /// RunGame is deliberately NOT called again. It is `while (Game.Running)`, so
-    /// a second call from inside it would nest the game's main loop inside itself.
-    /// Instead the existing loop is left running and the game object under it is
-    /// replaced: RunGame re-reads Core.Game each iteration, so the enclosing loop
-    /// picks the new world up. That is the only re-embark shape that does not
-    /// re-enter the game's own loop, and it is also the least verified -- if the
-    /// loop turns out to cache more of the game than it re-reads, this is where
-    /// that will show.
-    let reembark (path: string) =
-        lock gate (fun () ->
-            started <- false
-            prepared <- None)
-        prepareEarly path
-        lock gate (fun () ->
-            match prepared with
-            | Some(game, builder) ->
-                let info, names = copyIntoInfo builder
-                Probe.record path ("reembark modules " + String.Join(",", names)) |> ignore
-                suppressPopups <- true
-                try
-                    Probe.record path "reembark boot" |> ignore
-                    invoke "bootGame" [| game |] info |> ignore
-                    Probe.record path "reembark booted" |> ignore
-                finally
-                    suppressPopups <- false
-                // The builder is consumed by bootGame. Holding it would let a
-                // second reembark boot the same sheet into a released game.
-                prepared <- None
-            | None -> Probe.record path "reembark had nothing prepared" |> ignore)
+

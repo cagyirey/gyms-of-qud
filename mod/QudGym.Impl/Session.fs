@@ -45,6 +45,15 @@ module Session =
         // describe a prompt, so observe can refuse it instead of serving a stale
         // boundary as though it were current.
         member val PromptBody: bool = false with get, set
+        // The action ids this decision offered, fixed when it was published.
+        //
+        // Admission is checked against this list rather than by resolving the
+        // action. Resolving meant calling commandOf, and commandOf executes: for
+        // wield: and equip: it fires an event on the player. So a step that named a
+        // stale decision had already changed the game before the staleness was
+        // noticed -- the cursor did not protect anything. The binding is decided
+        // once, where the actions were built, and cannot change under a caller.
+        member val Offered: string[] = [||] with get, set
         member _.Id = id
         member _.Index = index
         member _.Turn = turn
@@ -141,10 +150,6 @@ module Session =
                 currentPlan <- None
                 planTrace <- "finished"
             | _ -> ())
-    // A re-embark asked for by the client, performed at the next decision
-    // boundary. Set on the transport thread, read and cleared on the game turn
-    // thread, which is the only thread a decision boundary runs on.
-    let mutable private reembarkWanted = false
     // Which of those options the game will actually accept, decided by the game
     // and read from the colour it rendered the choice in. A conversation gates
     // choices on reputation and on what the journal holds, and it greys the ones
@@ -314,11 +319,28 @@ module Session =
     let setRadius (value: int) = radius <- max 1 (min 24 value)
 
 
+    /// The game's own visibility verdict for a cell, and whether we could get one.
+    ///
+    /// The failure answer is "not visible", not "visible". A perception call that
+    /// throws used to return true, so any cell whose IsVisible could not be read
+    /// was reported as seen and everything in it was enumerated -- a missing API
+    /// quietly became omniscience, which is the one thing an observation must never
+    /// be. The distinction is kept rather than collapsed, so the caller can report
+    /// that perception is unavailable instead of inventing an observation.
     let private visible (cell: obj) =
-        // Prefer the game's own visibility verdict. Never reveal a cell the
-        // player has not perceived.
-        try call cell "IsVisible" [||] :?> bool
-        with _ -> true
+        if isNull cell then false, true
+        else
+            try
+                match call cell "IsVisible" [||] with
+                | :? bool as verdict -> verdict, true
+                | _ -> false, true
+            with _ -> false, false
+
+    /// Whether a cell's visibility could not be determined.
+    ///
+    /// Surfaced in the observation so a caller can tell an empty cell from an
+    /// unreadable one, rather than both arriving as an empty list.
+    let mutable private perceptionDegraded = false
 
     /// Objects in a cell that the engine itself does not consider scenery.
     ///
@@ -374,7 +396,7 @@ module Session =
                     let cell =
                         try call zone "GetCell" [| box (x0 + dx); box (y0 + dy) |]
                         with _ -> null
-                    if not (isNull cell) && visible cell then
+                    if not (isNull cell) && fst (visible cell) then
                         let objs = objectsIn cell
                         if not (isNull objs) then
                             for o in objs do
@@ -437,7 +459,7 @@ module Session =
                     with _ -> null
                 let ch =
                     if isNull cell then "?"
-                    elif not (visible cell) then " "
+                    elif not (fst (visible cell)) then " "
                     else glyph cell
                 row.Append(ch) |> ignore
             rows.Add(row.ToString())
@@ -1314,7 +1336,7 @@ module Session =
                         let c =
                             try call zone "GetCell" [| box (x0 + dx); box (y0 + dy) |]
                             with _ -> null
-                        if not (isNull c) && visible c then
+                        if not (isNull c) && fst (visible c) then
                             let objs = objectsIn c
                             if not (isNull objs) then
                                 for o in objs do
@@ -1390,7 +1412,7 @@ module Session =
                         let c =
                             try call zone "GetCell" [| box (x0 + dx); box (y0 + dy) |]
                             with _ -> null
-                        if not (isNull c) && visible c then
+                        if not (isNull c) && fst (visible c) then
                             let objs = objectsIn c
                             if not (isNull objs) then
                                 for o in objs do
@@ -1532,6 +1554,43 @@ module Session =
         elif s.Contains("east") then Some "CmdMoveE"
         elif s.Contains("west") then Some "CmdMoveW"
         else None
+
+    /// Whether this action id is one the harness can carry out, decided without
+    /// touching the game.
+    ///
+    /// A shape test, not a resolution. Resolving an action used to mean running it:
+    /// commandOf fires an event for wield: and equip: and opens a picker for
+    /// equip:, so using it to decide whether an action was allowed executed the
+    /// action. This only asks whether the id names a verb this session knows, and
+    /// for an answer it asks the open prompt whether that answer is on offer --
+    /// which is the check the observation's own action list was built from.
+    let private isAdmissible (action: string) =
+        if action.StartsWith("answer:") then
+            let openOptions, acceptable, cancellable =
+                lock gate (fun () -> offeredOptions, offeredAcceptable, offerCancellable)
+            match Int32.TryParse(action.Substring(7)) with
+            | true, n -> openOptions.Length > 0 && (answerNumbers openOptions acceptable cancellable |> Array.contains n)
+            | _ -> false
+        elif action.StartsWith("move_to:") then
+            match action.Substring(8).Split(',') with
+            | [| _; _ |] -> true
+            | _ -> false
+        else
+            // The verbs the action space publishes, named once and read off the same
+            // table the action list is built from. A second hand-written list here
+            // would be a second answer to "what can this do", which is how the
+            // action space and the executor drift apart.
+            action = "look"
+            || action = "wait"
+            || action = "take"
+            || action = "attack"
+            || action = "space"
+            || action = "continue"
+            || action.StartsWith("talk:")
+            || action.StartsWith("goto ")
+            || action.StartsWith("steer:")
+            || action.StartsWith("wield:")
+            || action.StartsWith("equip:")
 
     let private tryDirect (player: obj) (action: string) =
         if action.StartsWith("move_to:") then
@@ -1961,43 +2020,6 @@ module Session =
             // consulted before the client queue so a plan is not starved by a
             // waiting client, and it is advanced exactly one action per turn so
             // the world is observed between steps.
-            // A re-embark, performed here because a decision boundary is the only
-            // point where the game is quiescent and this thread is the core
-            // thread. After it, this turn has nothing to serve: the old world is
-            // gone and the next boundary belongs to the new one, which a client
-            // reaches by resetting again.
-            let reembarked =
-                lock gate (fun () ->
-                    if reembarkWanted then
-                        reembarkWanted <- false
-                        true
-                    else false)
-            if reembarked then (
-                say "reembark requested; running the game's own new-game path"
-                Embark.reembark logPath
-                say "reembark returned; awaiting the new episode's first boundary"
-                // The old episode's pending answers and plan belong to a world
-                // that no longer exists.
-                lock gate (fun () ->
-                    currentPlan <- None
-                    offeredOptions <- [||]
-                    offeredTitle <- ""
-                    offerCancellable <- false
-                    offeredAcceptable <- [||]
-                    awaitingAnswer <- false
-                    answerArrived <- TaskCompletionSource<int>())
-                running <- false)
-            // A plan is answered from inside the prompt, on the thread already
-            // waiting for it. So while a prompt is open this thread must not walk
-            // the plan at all.
-            //
-            // It was walking it, and the two disagreed about what an answer is.
-            // supply sees an Answer step as an action the command phase does not
-            // offer, reports it unsupported, and splices a continuation that put
-            // the step back. conversationTurn then found the same Answer again on
-            // the next prompt and pressed it a second time -- a program of
-            // "3, 1, 2, look, take" answered 3, 1, 2 and then 3 again, which is
-            // not a position the program contains.
             let promptOpen = lock gate (fun () -> awaitingAnswer)
             let fromPlan =
                 if not running || promptOpen then None
@@ -2005,17 +2027,28 @@ module Session =
                 match currentPlan with
                 | None -> None
                 | Some p ->
+                    // Pure. This must not touch the game.
+                    //
+                    // It used to call tryDirect, which is not a resolver: for
+                    // `talk:` it starts a conversation, and for `answer:` it
+                    // delivers one. So asking whether the talk action was available
+                    // *opened the conversation*, the nested conversationTurn consumed
+                    // the plan's answers from currentPlan, and then this thread
+                    // resumed advanceWith holding a plan captured before that call
+                    // and wrote its continuation back over the top -- restoring every
+                    // answer the conversation had just used. That is the repeated
+                    // answer, measured: a three-answer program going 3, 1, 2 and then
+                    // 3 again, with the log showing the plan holding
+                    // "answer:3,answer:1,answer:2" a fourth time.
+                    //
+                    // isAdmissible answers the same question without executing: it
+                    // checks the id's shape and, for an answer, whether the open
+                    // prompt is offering it. Execution is the dispatch below, once.
                     let available a =
-                        // Resolved, not merely tested: "answer:avail" has no answer
-                        // until a prompt is open, and the command phase is not one.
-                        // Naming it here reports the step as unavailable rather
-                        // than stepping an id the game cannot use.
                         if a = Plan.AvailableAction then
                             Plan.Refused(
                                 "no prompt is open, so there is no option to take; 'avail' answers a conversation")
-                        elif (match tryDirect player a with
-                              | Some _ -> true
-                              | None -> commandOf a player |> Option.isSome) then
+                        elif isAdmissible a then
                             Plan.Pressed a
                         else
                             Plan.Refused("the action space is not offering " + a)
@@ -2386,26 +2419,54 @@ module Session =
                 | None, _ | _, None ->
                     fail requestId "invalid_action" "step requires decision_id and action_id"
                 | Some decisionId, Some actionId ->
-                    match commandOf actionId (livePlayer ()) with
-                    | None -> fail requestId "invalid_action" "Action is not a current candidate"
-                    | Some _ ->
-                        let slot = currentWaiting ()
-                        match slot with
-                        | None -> fail requestId "stale_decision" "No decision is waiting"
-                        | Some current when current.Id <> decisionId ->
-                            fail requestId "stale_decision" "Re-observe: the decision boundary has changed"
-                        | Some current ->
-                            // Staging happens here on the Suave request thread. The
-                            // game thread is never signalled and never waits; it
-                            // picks this up on a later IdleWait tick.
-                            if current.Consumed || current.Action.IsSome then
-                                fail requestId "stale_decision" "That decision was already stepped"
-                            else
-                                current.Action <- Some actionId
-                                // Waiting for the next boundary is safe here: this is
-                                // the transport thread, not the game turn thread.
-                                let next = current.Onward.Task.GetAwaiter().GetResult()
-                                ok requestId (transition next.Index next.Turn next.Observation)
+                    // Admission is pure and atomic, and it happens before anything
+                    // is resolved or executed.
+                    //
+                    // This used to call commandOf first, and commandOf is not a
+                    // resolver: for wield: and equip: it fires an event on the
+                    // player. So a step naming a decision that had already moved on
+                    // changed the game and *then* reported the staleness -- the
+                    // cursor protected nothing. The claim was also read and written
+                    // outside the lock, so two concurrent steps could both pass it.
+                    //
+                    // Execution is the game thread's, in supply, where every verb
+                    // already lives. This thread only decides whether the action is
+                    // one this decision may receive.
+                    let mutable failure : string * string = ("stale_decision", "No decision is waiting")
+                    let claimed =
+                        lock gate (fun () ->
+                            match waiting with
+                            | Some current when current.Id = decisionId ->
+                                if current.Consumed || current.Action.IsSome then
+                                    failure <- ("stale_decision", "That decision was already stepped")
+                                    None
+                                elif not (isAdmissible actionId) then
+                                    failure <- ("invalid_action", "Action is not a current candidate")
+                                    None
+                                else
+                                    current.Action <- Some actionId
+                                    Some current
+                            | Some _ ->
+                                failure <- ("stale_decision", "Re-observe: the decision boundary has changed")
+                                None
+                            | None -> None)
+                    match claimed with
+                    | None ->
+                        let code, message = failure
+                        fail requestId code message
+                    | Some current ->
+                        // Bounded, and it says so. This used to wait on Onward with
+                        // no limit, so a step against a decision the game never
+                        // advanced past blocked the request thread indefinitely.
+                        let acquired =
+                            try current.Onward.Task.Wait 30000 with _ -> false
+                        if not acquired then
+                            fail requestId
+                                 "no_next_boundary"
+                                 "The game published no further boundary; the step may not have run"
+                        else
+                            let next = current.Onward.Task.GetAwaiter().GetResult()
+                            ok requestId (transition next.Index next.Turn next.Observation)
         | "run" ->
             // A script is a sequence of steps, not a second scheduler. The
             // displacement is reported because "consumed" is not "moved": an
@@ -2458,20 +2519,6 @@ module Session =
                             (jsonString (String.concat "," named)))
                 with ex ->
                     fail requestId "bad_program" (ex.GetBaseException().Message)
-        | "reembark" ->
-            // Ask for a second episode in this process.
-            //
-            // The request is recorded here and performed at the next decision
-            // boundary, because a boundary is the one place the game is quiescent
-            // and the core thread belongs to us. Doing it on this thread instead
-            // would be building a world on the transport thread while the turn
-            // thread is inside the game's own loop.
-            //
-            // Not a restore, and not a state mutation: Embark.reembark runs the
-            // game's own Release / CreateNewGame / Reset sequence. Snapshot,
-            // restore and full_state_hash stay disabled and unreachable from here.
-            lock gate (fun () -> reembarkWanted <- true)
-            ok requestId "{\"accepted\":true,\"at\":\"next decision boundary\"}"
         | "plan_status" ->
             let running, steps, note, trace, pending =
                 lock gate (fun () ->
