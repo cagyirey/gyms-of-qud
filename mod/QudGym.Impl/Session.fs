@@ -1584,6 +1584,7 @@ module Session =
             || action = "wait"
             || action = "take"
             || action = "attack"
+            || action = "autoexplore"
             || action = "space"
             || action = "continue"
             || action.StartsWith("talk:")
@@ -1695,6 +1696,12 @@ module Session =
         // inherits its idea of "nearest" and its refusal to swing at nothing
         // instead of guessing at a target list.
         elif action = "attack" then Some("CmdAttackNearest", box null)
+        // The game's own exploration, which is also how a point of interest gets
+        // found: CmdMoveToPointOfInterest only offers cells the player has already
+        // explored and that hold a proper-named creature or something marked
+        // important. So the way to reach the dromad is to explore first and travel
+        // second, not to walk blind in a direction.
+        elif action = "autoexplore" then Some("CmdAutoExplore", box null)
         // 'quests' is deliberately absent. It used to map to CmdQuests, which pushes
         // the QuestLog screen, and a pushed screen blocks on a keypress exactly as a
         // popup does -- so asking what quest the player was on left a window open and
