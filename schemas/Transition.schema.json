@@ -146,6 +146,14 @@
           ],
           "default": null
         },
+        "quests": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Quests",
+          "type": "array"
+        },
         "tiles": {
           "items": {
             "type": "string"

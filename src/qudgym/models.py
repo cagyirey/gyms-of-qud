@@ -94,6 +94,14 @@ class Observation(Model):
     entities: tuple[PerceivedEntity, ...] = ()
     messages: tuple[str, ...] = ()
     prompt: Prompt | None = None
+    # The player's open quests, in the quest log's own words.
+    #
+    # This is read, not opened. CmdQuests pushes the QuestLog screen, and a pushed
+    # screen blocks waiting for a key the harness cannot deliver -- the same wall as
+    # a popup, with no call to intercept and no question to publish. So the content
+    # comes from the quest log's own formatter over the game's own quest state, and
+    # a caller can see the quest it is being asked about without a window appearing.
+    quests: tuple[str, ...] = ()
     actions: tuple[CandidateAction, ...]
     view: ViewInfo | None = None
 

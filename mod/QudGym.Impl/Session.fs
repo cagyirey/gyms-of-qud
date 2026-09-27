@@ -141,6 +141,16 @@ module Session =
            "SE", 1, 1
            "SW", -1, 1 |]
 
+    /// A JSON string literal.
+    ///
+    /// Control characters are escaped rather than replaced. Every one of them used
+    /// to become a literal '?', which meant a newline -- control character 10 --
+    /// silently became a question mark, and any multi-line text arrived at the
+    /// client as one run-on line. It looked like the game had joined its own lines:
+    /// the quest log's steps read as "Watervine??ù Travel to Red Rock?Journey two
+    /// parasangs..." with the boundaries turned into the same '?' that happened to
+    /// be sitting in the text. Tabs and carriage returns are escaped for the same
+    /// reason; nothing in an observation is a reason to lose a character.
     let private jsonString (value: string) =
         let buf = StringBuilder(value.Length + 2)
         buf.Append('"') |> ignore
@@ -148,7 +158,11 @@ module Session =
             match ch with
             | '"' -> buf.Append("\\\"") |> ignore
             | '\\' -> buf.Append("\\\\") |> ignore
-            | _ when int ch < 32 -> buf.Append('?') |> ignore
+            | '\n' -> buf.Append("\\n") |> ignore
+            | '\r' -> buf.Append("\\r") |> ignore
+            | '\t' -> buf.Append("\\t") |> ignore
+            | c when int c < 32 || int c = 127 ->
+                buf.Append("\\u").Append((int c).ToString("x4")) |> ignore
             | _ -> buf.Append(ch) |> ignore
         buf.Append('"') |> ignore
         buf.ToString()
@@ -191,6 +205,22 @@ module Session =
                 |> Array.forall id)
             |> Option.defaultValue methods.[0]
         chosen.Invoke(target, args)
+
+    /// The part of the form type, e.g. the Inventory on the player.
+    let private partOfType (target: obj) (typeName: string) =
+        let partType = (gameAssembly ()).GetType(typeName, false)
+        if isNull partType then null
+        else
+            try
+                let getter =
+                    target.GetType().GetMethods(BindingFlags.Instance ||| BindingFlags.Public)
+                    |> Array.tryFind (fun m ->
+                        m.Name = "GetPart" && m.IsGenericMethodDefinition
+                        && m.GetParameters().Length = 0)
+                match getter with
+                | None -> null
+                | Some g -> g.MakeGenericMethod(partType).Invoke(target, [||])
+            with _ -> null
 
     let private glyph (cell: obj) =
         if isNull cell then "?"
@@ -512,27 +542,6 @@ module Session =
     /// The log hook is the source. The buffer scrape is kept only as a fallback
     /// for a boundary that arrives before the hook is installed, and it is
     /// labelled as such by returning it only when the log is empty.
-    let private messagesJson () =
-        let logged = recentLog 12
-        "[" + String.concat "," (Array.map jsonString logged) + "]"
-
-
-    /// The part of the form type, e.g. the Inventory on the player.
-    let private partOfType (target: obj) (typeName: string) =
-        let partType = (gameAssembly ()).GetType(typeName, false)
-        if isNull partType then null
-        else
-            try
-                let getter =
-                    target.GetType().GetMethods(BindingFlags.Instance ||| BindingFlags.Public)
-                    |> Array.tryFind (fun m ->
-                        m.Name = "GetPart" && m.IsGenericMethodDefinition
-                        && m.GetParameters().Length = 0)
-                match getter with
-                | None -> null
-                | Some g -> g.MakeGenericMethod(partType).Invoke(target, [||])
-            with _ -> null
-
     /// A name without the game's console markup.
     ///
     /// Names arrive as "{{W|left hand}}" and "{{C|1}} wrench". The markup is how the
@@ -691,6 +700,156 @@ module Session =
             with ex ->
                 say ("equip candidates failed: " + ex.GetBaseException().Message)
                 None
+
+    let private messagesJson () =
+        let logged = recentLog 12
+        "[" + String.concat "," (Array.map jsonString logged) + "]"
+
+    /// The player's open quests, as the quest log itself would list them.
+    ///
+    /// CmdQuests pushes the QuestLog screen, and a pushed screen blocks the way a
+    /// popup does, waiting for a key the harness cannot deliver. So the content is
+    /// read rather than drawn, from the same two sources the screen reads: the
+    /// game's active Quests, minus anything in FinishedQuests. The text is
+    /// QuestLog.GetLinesForQuest -- the game's own formatter, including its ordinal
+    /// step ordering, its finished-step markers and its clipping -- so what the
+    /// caller reads is what a player reads, rather than a summary of it that could
+    /// disagree with the screen about which steps are done.
+    ///
+    /// Reading the screen's model instead of its pixels is the only honest option
+    /// for a browsable surface: there is no call to intercept and no question to
+    /// publish, so the alternative would be to open the window and try to dismiss
+    /// it, which is the thing that already went wrong.
+    let private questsJson () =
+        try
+            // XRL.The.Game, the same accessor the harness already uses for
+            // XRL.The.Player. The quest log's own spelling is
+            // XRLCore.Core.Game, and that path does not resolve: XRLCore's Core
+            // field is typed XRLCore and exposes no Game member to reflect over, so
+            // reading it raised "Specified method is not supported" and every quest
+            // read returned empty. The.Game is the working route to the same object.
+            let game =
+                let the = (gameAssembly ()).GetType("XRL.The", false)
+                if isNull the then null
+                else
+                    let p = the.GetProperty("Game", BindingFlags.Static ||| BindingFlags.Public)
+                    if isNull p then null else p.GetValue(null, null)
+            if isNull game then "[]"
+            else
+                // Quests and FinishedQuests are fields on XRLGame, not properties,
+                // and both are StringMap<string, Quest>: index by key rather than
+                // treating the map as a list.
+                let active =
+                    game.GetType().GetField("Quests", BindingFlags.Instance ||| BindingFlags.Public)
+                        .GetValue(game)
+                let finished =
+                    game.GetType().GetField("FinishedQuests", BindingFlags.Instance ||| BindingFlags.Public)
+                        .GetValue(game)
+                let questLog = (gameAssembly ()).GetType("XRL.UI.QuestLog", false)
+                // Four parameters (Quest, IncludeTitle, Clip, ClipWidth), all with
+                // defaults, so they are passed positionally and explicitly rather
+                // than through a binder that will not see the optionals.
+                let linesOf =
+                    questLog.GetMethods(BindingFlags.Static ||| BindingFlags.Public)
+                    |> Array.tryFind (fun m -> m.Name = "GetLinesForQuest" && m.GetParameters().Length = 4)
+                if isNull active || isNull finished || linesOf.IsNone then "[]"
+                else
+                    // Read Values, which returns a ValueEnumerator -- a struct whose
+                    // Current is the Quest itself, not a KeyValuePair. The enumerator
+                    // is driven by hand with MoveNext/Current, because it is a struct:
+                    // F#'s `for` over IEnumerable boxes it and the loop body never
+                    // runs, which is how the previous version returned a confident
+                    // empty list while a quest was genuinely held.
+                    //
+                    // Five wrong answers in a row, every one of them silent, which is
+                    // why nothing from this type's surface is trusted except Count and
+                    // ContainsKey:
+                    //
+                    //   * Casting to IDictionary throws "Specified method is not
+                    //     supported" -- the explicit implementation is generic.
+                    //   * foreach yields nothing, because the enumerator is a struct.
+                    //   * Testing each element for KeyValuePair<string, object> matched
+                    //     nothing; the map yields KeyValuePair<string, Quest>.
+                    //   * Item[int] is a field-reflection path and returned the key
+                    //     where a Quest was expected, so Quest.ID read back as the
+                    //     quest's display name.
+                    //   * Quest.ID and XRLGame.Quests are fields, not properties, so
+                    //     reading them through the property API found nothing.
+                    //
+                    // The lesson is the same one the equipment work produced: the
+                    // game's types are richer than they look, and a reflection call
+                    // that returns null is a question, not an answer.
+                    let values (map: obj) =
+                        try
+                            let valuesProp =
+                                map.GetType().GetProperty("Values", BindingFlags.Instance ||| BindingFlags.Public)
+                            if isNull valuesProp then []
+                            else
+                                match valuesProp.GetValue(map, null) with
+                                | null -> []
+                                | enumerator ->
+                                    let t = enumerator.GetType()
+                                    let moveNext = t.GetMethod("MoveNext", BindingFlags.Instance ||| BindingFlags.Public)
+                                    let current = t.GetProperty("Current", BindingFlags.Instance ||| BindingFlags.Public)
+                                    if isNull moveNext || isNull current then []
+                                    else
+                                        let collected = ResizeArray<obj>()
+                                        // Bounded: a map this small cannot need more,
+                                        // and an unbounded loop on a game-owned type
+                                        // is a hazard rather than a style question.
+                                        let mutable steps = 0
+                                        while steps < 256 do
+                                            steps <- steps + 1
+                                            let moved = moveNext.Invoke(enumerator, [||]) :?> bool
+                                            if not moved then
+                                                steps <- 256
+                                            else
+                                                let v = current.GetValue(enumerator, null)
+                                                if not (isNull v) then collected.Add(v)
+                                        List.ofSeq collected
+                        with _ -> []
+                    let containsKey (map: obj) (key: string) =
+                        match map.GetType().GetMethods(BindingFlags.Instance ||| BindingFlags.Public)
+                              |> Array.tryFind (fun m ->
+                                  m.Name = "ContainsKey" && m.GetParameters().Length = 1
+                                  && m.GetParameters().[0].ParameterType = typeof<string>) with
+                        | Some m -> m.Invoke(map, [| box key |]) :?> bool
+                        | None -> false
+                    // Finished quests are excluded by identity, so a quest is neither
+                    // listed twice nor listed after it is complete. The quest's own ID
+                    // is the key the finished map is asked about, which is exactly the
+                    // comparison QuestLog makes. A field, not a property.
+                    let questKey (q: obj) =
+                        try
+                            let f = q.GetType().GetField("ID", BindingFlags.Instance ||| BindingFlags.Public)
+                            if isNull f then "" else f.GetValue(q) :?> string
+                        with _ -> ""
+                    let entries =
+                        values active
+                        |> List.filter (fun q ->
+                            not (isNull q)
+                            && not (
+                                let key = questKey q
+                                not (String.IsNullOrEmpty key) && containsKey finished key))
+                    let blocks = ResizeArray<string>()
+                    for (q: obj) in entries do
+                        match linesOf with
+                        | None -> ()
+                        | Some format ->
+                            match format.Invoke(null, [| q; box true; box true; box 74 |]) with
+                            | :? System.Collections.IEnumerable as lines ->
+                                let collected = ResizeArray<string>()
+                                for (line: obj) in lines do
+                                    match line with
+                                    | :? string as s -> collected.Add(stripMarkup s)
+                                    | _ -> collected.Add("")
+                                if collected |> Seq.exists (fun s -> s <> "") then
+                                    blocks.Add(String.concat "\n" collected)
+                            | _ -> ()
+                    "[" + String.concat "," (blocks |> Seq.map jsonString) + "]"
+        with ex ->
+            say ("quest read failed: " + ex.GetBaseException().Message)
+            "[]"
 
     /// Whether a name picks this item out of a list, the way the game reads a typed
     /// name.
@@ -942,8 +1101,8 @@ module Session =
             | _ -> actionsJsonSafe player
         let phase = if conversation.IsSome then "prompt" else "command"
         id, sprintf
-            "{\"episode_id\":%s,\"decision_id\":%s,\"turn\":%d,\"phase\":%s,\"player\":{\"x\":%d,\"y\":%d,\"hp\":%d,\"max_hp\":%d},\"view\":{\"radius\":%d,\"zone_width\":%d,\"zone_height\":%d},\"tiles\":[%s],\"entities\":%s,\"messages\":%s,\"prompt\":%s,\"actions\":%s}"
-            (jsonString episode) (jsonString id) turn (jsonString phase) x y hp maxHp radius width height tiles entities messages promptJson actions
+            "{\"episode_id\":%s,\"decision_id\":%s,\"turn\":%d,\"phase\":%s,\"player\":{\"x\":%d,\"y\":%d,\"hp\":%d,\"max_hp\":%d},\"view\":{\"radius\":%d,\"zone_width\":%d,\"zone_height\":%d},\"tiles\":[%s],\"entities\":%s,\"messages\":%s,\"prompt\":%s,\"actions\":%s,\"quests\":%s}"
+            (jsonString episode) (jsonString id) turn (jsonString phase) x y hp maxHp radius width height tiles entities messages promptJson actions (questsJson ())
 
     let private transition index turn observationJson =
         sprintf
@@ -1348,7 +1507,11 @@ module Session =
     let private commandOf (action: string) (player: obj) =
         if action = "wait" then Some("CmdWait", box null)
         elif action = "look" then Some("CmdLook", box null)
-        elif action = "quests" then Some("CmdQuests", box null)
+        // 'quests' is deliberately absent. It used to map to CmdQuests, which pushes
+        // the QuestLog screen, and a pushed screen blocks on a keypress exactly as a
+        // popup does -- so asking what quest the player was on left a window open and
+        // consumed no turn. The quest list is part of the observation now, so the
+        // question is answered by looking rather than by opening something.
         elif action = "journal" then Some("CmdJournal", box null)
         elif action = "history" then Some("CmdMessageHistory", box null)
         elif action.StartsWith("wield:") then
