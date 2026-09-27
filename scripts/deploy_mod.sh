@@ -61,5 +61,24 @@ else
 fi
 cp "$ROOT/mod/QudGym.Impl/presets.index" "$DEST/lib/presets.index" 2>/dev/null || true
 
-echo "deployed to $DEST"
+# Prove the assembly the game will load is the one just built. Every patch today
+# compiled, bound and passed tests while lib/ held no C# assembly at all, so the
+# deployed file is checked for the patch types rather than assumed present: a
+# missing gate is the failure that looked exactly like success.
+NEEDED=(NotificationSpaceGate NotificationBlockGate NotificationBlockPromptGate
+        NotificationBlockSpaceGate NotificationBlockWithCopyGate PickOptionGate
+        ConversationPopupHook QuestStartNoticeGate)
+missing=()
+for gate in "${NEEDED[@]}"; do
+  if ! strings "$DEST/lib/QudGym.dll" 2>/dev/null | grep -q "$gate"; then
+    missing+=("$gate")
+  fi
+done
+if [[ ${#missing[@]} -gt 0 ]]; then
+  echo "deployed assembly is missing patch types: ${missing[*]}" >&2
+  echo "the game would load a mod whose patches are not present" >&2
+  exit 1
+fi
+
+echo "deployed to $DEST (${#NEEDED[@]} patch types verified in the deployed assembly)"
 ls "$DEST" | sed 's/^/  /'
