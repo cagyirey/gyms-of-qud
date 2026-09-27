@@ -258,13 +258,7 @@ module Plan =
     /// An action is named, never invented: a step naming something the world
     /// does not offer comes back Unsupported at run time rather than being
     /// pushed and ignored, which is indistinguishable from success.
-    let parse (raw: string) : Plan =
-        // The transport's string reader is hand-rolled and does not unescape
-        // JSON string escapes, so a program arrives with a literal backslash-n
-        // where its newlines were. Restore them before splitting, or the whole
-        // program parses as one action.
-        let text =
-            raw.Replace("\\r", "\r").Replace("\\n", "\n").Replace("\\t", "\t")
+    let parse (text: string) : Plan =
         let steps =
             text.Split([| char 10; char 13 |], StringSplitOptions.RemoveEmptyEntries)
             |> Array.choose (fun raw ->

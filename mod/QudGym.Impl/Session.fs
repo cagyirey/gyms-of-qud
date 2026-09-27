@@ -6,6 +6,8 @@ open System.IO
 open System.Net
 open System.Net.Sockets
 open System.Reflection
+open Newtonsoft.Json
+open Newtonsoft.Json.Linq
 open System.Text
 open System.Threading
 open System.Threading.Tasks
@@ -460,104 +462,50 @@ module Session =
     /// `doneCount = items.Length` and the run reported success having done
     /// nothing. This reads the array properly, and a non-array is a hard error
     /// rather than an empty plan.
-    let private findStringArray name (json: string) =
-        let key = "\"" + name + "\""
-        let at = json.IndexOf(key, 0)
-        if at < 0 then [||]
-        else
-            let mutable j = at + key.Length
-            while j < json.Length && Char.IsWhiteSpace json.[j] do j <- j + 1
-            if j < json.Length && json.[j] = ':' then
-                j <- j + 1
-                while j < json.Length && Char.IsWhiteSpace json.[j] do j <- j + 1
-                if j >= json.Length || json.[j] <> '[' then
-                    failwithf "%s must be a JSON array of strings" name
-                j <- j + 1
-                let acc = ResizeArray<string>()
-                let mutable depth = 1
-                let mutable inString = false
-                let mutable escape = false
-                let mutable current = System.Text.StringBuilder()
-                let mutable sawValue = false
-                while j < json.Length && depth > 0 do
-                    let c = json.[j]
-                    if inString then
-                        if escape then
-                            current.Append(c) |> ignore
-                            escape <- false
-                        elif c = '\\' then escape <- true
-                        elif c = '"' then
-                            inString <- false
-                            acc.Add(current.ToString())
-                            current.Clear() |> ignore
-                        else current.Append(c) |> ignore
-                    else
-                        match c with
-                        | '[' -> depth <- depth + 1
-                        | ']' -> depth <- depth - 1
-                        | '"' -> inString <- true; sawValue <- true
-                        | ',' when depth = 1 -> ()
-                        | _ -> ()
-                    j <- j + 1
-                if inString || depth > 0 then failwithf "%s is not a closed JSON array" name
-                if not sawValue then failwithf "%s must not be an empty array" name
-                acc.ToArray()
-            else [||]
+    // -- request body parsing ---------------------------------------------
+    //
+    // These used to locate a field with IndexOf and read forward to the next
+    // quote. A value that was not a plain string -- an array, an escaped
+    // string, a nested object -- then produced nothing at all, silently, and
+    // an empty action list satisfied `doneCount = items.Length`, so a batched
+    // run reported success having executed nothing. A hand-rolled reader cannot
+    // be trusted to fail loudly, so the mod borrows the JSON parser the game
+    // already loads.
+
+    let private bodyOf (json: string) =
+        try JObject.Parse json with _ -> null
 
     let private findString name (json: string) =
-        let key = "\"" + name + "\""
-        let mutable start = 0
-        let mutable found = None
-        while found.IsNone && start < json.Length do
-            let at = json.IndexOf(key, start)
-            if at < 0 then start <- json.Length
-            else
-                let mutable j = at + key.Length
-                while j < json.Length && Char.IsWhiteSpace json.[j] do j <- j + 1
-                if j < json.Length && json.[j] = ':' then
-                    j <- j + 1
-                    while j < json.Length && Char.IsWhiteSpace json.[j] do j <- j + 1
-                    if j < json.Length && json.[j] = '"' then
-                        j <- j + 1
-                        let buf = StringBuilder()
-                        let mutable closed = false
-                        while j < json.Length && not closed do
-                            if json.[j] = '\\' && j + 1 < json.Length then
-                                buf.Append(json.[j + 1]) |> ignore
-                                j <- j + 2
-                            elif json.[j] = '"' then
-                                closed <- true
-                                j <- j + 1
-                            else
-                                buf.Append(json.[j]) |> ignore
-                                j <- j + 1
-                        if closed then found <- Some (buf.ToString())
-                        else start <- json.Length
-                    else start <- at + key.Length
-                else start <- at + key.Length
-        found
+        let o = bodyOf json
+        if isNull o then None
+        else
+            match o.[name] with
+            | :? JValue as v when v.Type = JTokenType.String -> Some(v.Value.ToString())
+            | _ -> None
 
     let private findInt name (json: string) =
-        let key = "\"" + name + "\""
-        let at = json.IndexOf(key)
-        if at < 0 then None
+        let o = bodyOf json
+        if isNull o then None
         else
-            let mutable j = at + key.Length
-            while j < json.Length && Char.IsWhiteSpace json.[j] do j <- j + 1
-            if j >= json.Length || json.[j] <> ':' then None
-            else
-                j <- j + 1
-                while j < json.Length && Char.IsWhiteSpace json.[j] do j <- j + 1
-                let start = j
-                if j < json.Length && json.[j] = '-' then j <- j + 1
-                let digits = j
-                while j < json.Length && Char.IsDigit json.[j] do j <- j + 1
-                if j = digits then None
-                else
-                    match Int32.TryParse(json.Substring(start, j - start)) with
-                    | true, n -> Some n
-                    | _ -> None
+            match o.[name] with
+            | :? JValue as v when v.Type = JTokenType.Integer -> Some(Convert.ToInt32 v.Value)
+            | _ -> None
 
+    /// A JSON array of strings, decoded. Escapes are handled by the parser, so
+    /// a multi-line program arrives with its newlines intact.
+    let private findStringArray name (json: string) =
+        let o = bodyOf json
+        if isNull o then [||]
+        else
+            match o.[name] with
+            | :? JArray as arr ->
+                arr
+                |> Seq.map (fun t ->
+                    match t with
+                    | :? JValue as v when v.Type = JTokenType.String -> v.Value.ToString()
+                    | _ -> failwithf "%s must be an array of strings" name)
+                |> Seq.toArray
+            | _ -> failwithf "%s must be a JSON array of strings" name
     let private capabilities () =
         sprintf
             "{\"protocol_version\":\"0.1\",\"backend\":\"qud-live\",\"game_build\":%s,\"is_mock\":false,\"snapshot\":false,\"deterministic_restore\":false,\"full_state_hash\":false}"
