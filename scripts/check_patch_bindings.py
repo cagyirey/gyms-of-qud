@@ -22,7 +22,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/check_patch_bindings.fsx"
-MOD_DLL = ROOT / "mod/QudGym/obj/Release/netstandard2.1/QudGym.dll"
+DEPLOY = ROOT / "scripts/deploy_mod.sh"
+# The assembly the game actually loads. The game compiles the mod from source in
+# its own Mods directory, so what matters is the deployed copy -- for a long time
+# the check read a locally built DLL while the game ran a stale copy of the
+# sources, and every patch passed here while none of them were loaded. A check on
+# an assembly nothing runs cannot fail for the reason that matters.
+MOD_DLL = Path(os.environ.get(
+    "QUDGYM_MOD_DIR",
+    str(Path.home() / "Library/Application Support/com.FreeholdGames.CavesOfQud/Mods/QudGym"),
+)) / "lib/QudGym.dll"
 MANAGED_SUFFIX = Path("CoQ.app/Contents/Resources/Data/Managed")
 
 
@@ -42,13 +51,29 @@ def parse_failures(output: str) -> list[str]:
     return [line.split(None, 2)[2].strip() for line in output.splitlines() if line.startswith("FAIL ")]
 
 
+def deploy() -> None:
+    """Build the mod and copy it into the game's Mods directory.
+
+    Deploying is a separate step from building because the game compiles the mod
+    from source in its own directory: a build that is never copied changes nothing
+    about the running game. Doing it here rather than leaving it to memory is the
+    point -- the reason every Harmony patch written today went unloaded was that
+    this step was a habit rather than a step, and every check still passed.
+    """
+    result = subprocess.run(["bash", str(DEPLOY)], capture_output=True, text=True, timeout=600)
+    if result.returncode:
+        raise BindingError(f"deploy failed:\n{(result.stdout + result.stderr).strip()}")
+
+
 def check(managed: Path, mod_dll: Path = MOD_DLL, dotnet: str | None = None) -> list[str]:
     """Return the unbound targets, empty when every patch binds."""
     dotnet = dotnet or shutil.which("dotnet")
     if not dotnet:
         raise BindingError(".NET SDK is required to resolve patch targets offline")
     if not mod_dll.is_file():
-        raise BindingError(f"mod assembly not built: {mod_dll}")
+        raise BindingError(
+            f"no deployed mod assembly at {mod_dll}; run scripts/deploy_mod.sh first"
+        )
     environment = {**os.environ, "QUD_MANAGED": str(managed), "QUD_MOD_DLL": str(mod_dll)}
     result = subprocess.run(
         [dotnet, "fsi", str(SCRIPT)], capture_output=True, text=True, timeout=300,
@@ -66,10 +91,14 @@ def main() -> int:
     parser.add_argument("game_dir", type=Path, nargs="?", default=None,
                         help="Caves of Qud .app directory; defaults to the Steam install")
     parser.add_argument("--mod-dll", type=Path, default=MOD_DLL)
+    parser.add_argument("--no-deploy", action="store_true",
+                        help="check the deployed copy as it is, without deploying first")
     args = parser.parse_args()
     game_dir = args.game_dir or Path.home() / (
         "Library/Application Support/Steam/steamapps/common/Caves of Qud")
     try:
+        if not args.no_deploy:
+            deploy()
         failures = check(find_managed(game_dir), args.mod_dll)
     except BindingError as error:
         print(error)

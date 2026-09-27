@@ -2061,27 +2061,38 @@ module Session =
         | "observe" ->
             if not resetUsed then fail requestId "reset_required" "Reset before observing"
             else
+                let promptIsStale (slot: Slot) =
+                    slot.PromptBody && not (lock gate (fun () -> awaitingAnswer))
+                let rec awaitBoundary (slot: Slot) (budget: int) =
+                    // A prompt body is served only while the prompt is open.
+                    //
+                    // The body is a snapshot from when the question was asked, so
+                    // once the answer is delivered it describes a dialogue that has
+                    // already advanced. Serving it then is what reported a finished
+                    // conversation as a live prompt, five times over.
+                    //
+                    // The fix is to wait for the boundary that is genuinely coming
+                    // rather than to refuse. After an answer the game's turn
+                    // resumes, supply publishes the next boundary, and that boundary
+                    // carries the state after the answer -- so refusing sent callers
+                    // into a poll loop to fetch something the harness could simply
+                    // have handed them. Bounded, because "the next boundary" is a
+                    // promise about the game's own loop and not a licence to hang:
+                    // if the game is not going to produce one, this must say so
+                    // rather than wait forever.
+                    if not (promptIsStale slot) then Some slot
+                    elif budget <= 0 then None
+                    elif slot.Onward.Task.Wait(50) then
+                        awaitBoundary slot.Onward.Task.Result (budget - 50)
+                    else None
                 match currentWaiting () with
-                // A prompt body is served only while the prompt is still open.
-                //
-                // The body is a snapshot taken when the question was asked, so once
-                // the answer has been delivered it describes a dialogue that has
-                // already advanced. Serving it then is what produced a finished
-                // conversation reported as a live prompt, and it misled the caller
-                // five times: it answered a prompt that no longer existed, and the
-                // game's own no_prompt refusal was the only thing that caught it.
-                //
-                // Refusing is the honest answer, not a fresh body. Recomputing here
-                // would report a decision boundary that has not happened -- no turn
-                // has ended, so there is nothing new to observe -- and inventing one
-                // is how a stale read turns into a fabricated one. The caller is
-                // told to re-observe, and the next real boundary will carry the
-                // state after the answer.
-                | Some slot when slot.PromptBody && not (lock gate (fun () -> awaitingAnswer)) ->
-                    fail requestId
-                        "stale_decision"
-                        "That prompt has been answered; re-observe at the next boundary"
-                | Some slot -> ok requestId slot.Observation
+                | Some slot ->
+                    match awaitBoundary slot 5000 with
+                    | Some fresh -> ok requestId fresh.Observation
+                    | None ->
+                        fail requestId
+                            "stale_decision"
+                            "That prompt has been answered and no new boundary has arrived"
                 | None -> fail requestId "reset_required" "No decision is waiting"
         | "step" ->
             if not resetUsed then fail requestId "reset_required" "Reset before stepping"

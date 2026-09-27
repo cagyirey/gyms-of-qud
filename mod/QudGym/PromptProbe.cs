@@ -202,6 +202,50 @@ static class NotificationBlockSpaceGate
     static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
 }
 
+// Popup has five methods that block waiting for a key. The two above were not
+// enough, and the omission was found the way it should have been earlier: a live
+// run left the embark summary sitting on screen -- "It's you." with the character's
+// equipment list -- and the game stopped taking turns entirely, so every later
+// action reported consumed=0.
+//
+// That summary is QudGameBootModule, raised through Popup.Show, which delegates to
+// ShowBlock. ShowBlock honours Popup.Suppress exactly as the other four do, so the
+// same gate applies and the game's own logging path records the text.
+//
+// These three are gated, and the list is now total: ShowBlock, ShowBlockPrompt,
+// ShowBlockSpace and ShowSpace all wait, and all four are covered. ShowBlockPrompt
+// and ShowBlockWithCopy take a prompt string as well, so the game's Suppress branch
+// logs the message and the caller gets Keys.Space back, which is the same value
+// those methods return when suppressed.
+[HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowBlock),
+    new System.Type[] { typeof(string), typeof(string), typeof(string), typeof(bool),
+                        typeof(bool), typeof(bool), typeof(bool),
+                        typeof(Genkit.Location2D) })]
+static class NotificationBlockGate
+{
+    static void Prefix(ref bool __state) { PopupSuppress.Raise(ref __state); }
+    static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
+}
+
+[HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowBlockPrompt),
+    new System.Type[] { typeof(string), typeof(string), typeof(string),
+                        typeof(ConsoleLib.Console.IRenderable), typeof(bool),
+                        typeof(bool), typeof(bool), typeof(bool), typeof(bool) })]
+static class NotificationBlockPromptGate
+{
+    static void Prefix(ref bool __state) { PopupSuppress.Raise(ref __state); }
+    static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
+}
+
+[HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowBlockWithCopy),
+    new System.Type[] { typeof(string), typeof(string), typeof(string),
+                        typeof(string), typeof(bool) })]
+static class NotificationBlockWithCopyGate
+{
+    static void Prefix(ref bool __state) { PopupSuppress.Raise(ref __state); }
+    static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
+}
+
 // A menu the player has to navigate is a question the harness can answer without
 // the menu being drawn.
 //
