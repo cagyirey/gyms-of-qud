@@ -456,40 +456,20 @@ module Session =
                         ("message log hook FAILED " + ex.GetBaseException().Message)
                     |> ignore
 
-    /// Messages the game logged since the last call, oldest first.
-    let private drainLog () =
+    /// The most recent messages the game logged, oldest first.
+    ///
+    /// This is a rolling window, not a per-boundary delta, and the difference
+    /// matters. Draining cleared the buffer, so a message logged between two
+    /// decision boundaries was destroyed whenever no client observed in
+    /// between -- which is the normal case, since supply runs continuously. The
+    /// log the game builds is a history, and the observation should carry the
+    /// recent history, so nothing is dropped for being logged quickly.
+    let private recentLog (take: int) =
         ensureLogHook ()
         lock logGate (fun () ->
-            if logMessages.Count = 0 then [||]
-            else
-                let out = logMessages.ToArray()
-                logMessages.Clear()
-                out)
-
-    let private bufferMessages () =
-        match currentBuffer () with
-        | null -> "[]"
-        | buffer ->
-            try
-                let text = call buffer "ToString" [||] :?> string
-                let lines =
-                    if isNull text then [||]
-                    else
-                        text.Split([| '\r'; '\n' |], StringSplitOptions.RemoveEmptyEntries)
-                        |> Array.map (fun l -> l.Trim())
-                        |> Array.filter (fun l -> l <> "")
-                // The buffer renders the whole screen: map above, message log at
-                // the bottom. Take the trailing rows in order, which is where the
-                // text the player was just shown lives, and skip blank rows.
-                let picked =
-                    lines
-                    |> Array.filter (fun l -> l.Trim().Length > 0)
-                    |> Array.truncate 12
-                    |> Array.rev
-                    |> Array.truncate 12
-                    |> Array.rev
-                "[" + String.concat "," (Array.map jsonString picked) + "]"
-            with _ -> "[]"
+            let all = logMessages.Count
+            let start = max 0 (all - take)
+            logMessages |> Seq.skip start |> Seq.toArray)
 
     /// What the player was shown, as text.
     ///
@@ -497,12 +477,8 @@ module Session =
     /// for a boundary that arrives before the hook is installed, and it is
     /// labelled as such by returning it only when the log is empty.
     let private messagesJson () =
-        let logged = drainLog ()
-        if logged.Length > 0 then
-            let picked = logged |> Array.truncate 20
-            "[" + String.concat "," (Array.map jsonString picked) + "]"
-        else
-            bufferMessages ()
+        let logged = recentLog 12
+        "[" + String.concat "," (Array.map jsonString logged) + "]"
 
     let private observation (player: obj) turn index =
         let cell = memberValue player "CurrentCell"
