@@ -49,6 +49,20 @@ module Plan =
         /// each turn until adjacent, so an interrupted autopilot resumes rather
         /// than leaving the plan stuck.
         | Steer of name: string
+        /// Answer the open prompt with the option at this position.
+        ///
+        /// Positional, by index, and deliberately not by phrase. A conversation
+        /// offers options whose wording the game varies between runs -- the same
+        /// node has been seen as "I'm looking for work.", "Do you have work that
+        /// needs doing?" and "My services are available if you have work to
+        /// offer." A selector that matched on text therefore broke every time the
+        /// phrasing changed, and the only reason to write one is that answering
+        /// could not be written down at all. It can now.
+        ///
+        /// The index is the number the observation publishes, so a plan and the
+        /// prompt it answers refer to the same list the game built. 0 is the
+        /// game's escape, offered only when it permits one.
+        | Answer of index: int
         /// If the test holds take the first plan, otherwise the second.
         | Branch of test: Test * whenTrue: Plan * whenFalse: Plan option
         /// Repeat the body until the test holds, or the limit is reached.
@@ -69,6 +83,17 @@ module Plan =
 
     let act action = Act(action, None)
     let actIf guard action = Act(action, Some guard)
+    /// Answer the open prompt with the option at this position. 0 is the game's
+    /// own escape, offered only when it permits one.
+    let answer index = Answer index
+    /// Answer with a sequence of positions, one per turn.
+    ///
+    /// A set rather than a single choice, because a conversation is a sequence of
+    /// questions and writing them out one `answer` per line is the same work with
+    /// more punctuation. The conversation at the watervine farmer is
+    /// `options [3; 1; 2; 0; 0]` -- ask for work, say you are looking for it,
+    /// accept, then leave and cancel out.
+    let answers (indices: int list) = All(List.map Answer indices)
     let choose test whenTrue whenFalse = Branch(test, whenTrue, whenFalse)
     let repeatUntil test body limit = Repeat(test, body, limit)
     let all plans = All plans
@@ -78,6 +103,7 @@ module Plan =
         match plan with
         | Act(a, _) -> [ a ]
         | Steer n -> [ "steer:" + n ]
+        | Answer i -> [ "answer:" + string i ]
         | Branch(_, a, b) -> actions a @ (match b with Some x -> actions x | None -> [])
         | Repeat(_, body, _) -> actions body
         | All ps -> List.concat (List.map actions ps)
@@ -234,6 +260,19 @@ module Plan =
             | _ ->
                 if available action then Stepped(action, All [])
                 else Unsupported(action, All [])
+        | Answer index ->
+            // Answering is delivered as an action id, so it travels the one path
+            // every other action does and needs no second mechanism.
+            //
+            // The observation publishes an "answer:N" action for exactly the
+            // options the game is offering, so the id is offered only when the
+            // game permits it. A plan that names an answer the game did not offer
+            // is therefore reported Unsupported rather than pressed into the void,
+            // which is the same rule every other step follows.
+            let action = "answer:" + string index
+            trace ("answer " + string index)
+            if available action then Stepped(action, All [])
+            else Skipped(All [])
         | Branch(test, whenTrue, whenFalse) ->
             if test view then advanceWith trace available view whenTrue
             else
@@ -294,6 +333,7 @@ module Plan =
     ///
     ///     move:E
     ///     if sees 2 watervine farmer then talk:watervine farmer
+    ///     options 3, 1, 2, esc
     ///
     /// An action is named, never invented: a step naming something the world
     /// does not offer comes back Unsupported at run time rather than being
@@ -326,5 +366,26 @@ module Plan =
                     let action = body.Substring(at + marker.Length).Trim()
                     if action = "" then failwithf "step has no action: %s" line
                     Some(Act(action, Some(parseTest testText)))
+                elif line.StartsWith("options ", StringComparison.Ordinal) then
+                    // Answer a conversation: one position per turn.
+                    //
+                    //     options 3, 1, 2, esc
+                    //
+                    // Positions, because the game's wording for the same node
+                    // changes between runs and a phrase selector would break on
+                    // ordinary variation. `esc` is the game's own escape, index 0,
+                    // which it offers only when it permits one.
+                    let rest = line.Substring(8).Trim()
+                    if rest = "" then failwith "options needs at least one position"
+                    let picks =
+                        rest.Split([| ','; ' ' |], StringSplitOptions.RemoveEmptyEntries)
+                        |> Array.map (fun token ->
+                            if token.Equals("esc", StringComparison.OrdinalIgnoreCase) then 0
+                            else
+                                match Int32.TryParse(token) with
+                                | true, n -> n
+                                | _ -> failwithf "options takes a position or 'esc': %s" token)
+                        |> Array.toList
+                    Some(answers picks)
                 else Some(Act(line, None)))
         All(Array.toList steps)
