@@ -51,11 +51,33 @@ static class QudGymInputGate
     }
 }
 
+// A popup this gate suppresses must still say what it said.
+//
+// Popup.Show is suppressed while the F# boot holds the game thread, so that boot
+// cannot be blocked by a dialog only a human could dismiss. Suppressing is the
+// right call and discarding the text is not: the message is the only record that
+// it happened, and a boot-time notification dropped on the floor is information
+// the player never gets. So a suppressed popup is logged through the game's own
+// logging path, exactly as the notification gate does, and the same rule holds
+// whether the game would have logged it itself.
 [HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.Show), new System.Type[] { typeof(string), typeof(string), typeof(string), typeof(bool), typeof(bool), typeof(bool), typeof(bool), typeof(Genkit.Location2D) })]
 static class QudGymPopupGate
 {
-    static bool Prefix()
+    static bool Prefix(string Message, string Title)
     {
-        return QudGymBridge.AllowPopup();
+        if (QudGymBridge.AllowPopup())
+            return true;
+        try
+        {
+            string text = string.IsNullOrEmpty(Title) ? Message : Title + ": " + Message;
+            // The game logs Popup.Show itself when asked to, and we are skipping
+            // that path, so the log line is ours to write either way.
+            QudGymBridge.LogMessage(text);
+        }
+        catch (System.Exception ex)
+        {
+            QudGymBridge.Note("suppressed popup log failed " + ex.GetBaseException().Message);
+        }
+        return false;
     }
 }
