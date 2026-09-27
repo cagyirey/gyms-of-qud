@@ -105,6 +105,10 @@ async def play(program: str, *, seconds: float, watch: bool) -> int:
         url.strip(),
         additional_headers={"Authorization": f"Bearer {token.strip()}"},
         max_size=MAX_MESSAGE_BYTES,
+        # A run must be able to end. Without this the close handshake waits on a
+        # server that is mid-conversation with the turn thread blocked, and the
+        # process hangs after its work is already done.
+        close_timeout=3,
     ) as socket:
         game = Game(socket)
 
@@ -123,18 +127,25 @@ async def play(program: str, *, seconds: float, watch: bool) -> int:
             return 1
         print(f"  program: {submitted.get('plan_actions')}\n")
 
+        # Stop the moment the program is finished, and say something only when it
+        # changed. The old loop slept out its whole budget on every run: the status
+        # reported a plan as running even after its last step, so completion was
+        # only ever visible as a timeout.
         deadline = asyncio.get_event_loop().time() + seconds
         status: dict = {}
+        previous = None
         while asyncio.get_event_loop().time() < deadline:
-            await asyncio.sleep(3)
+            await asyncio.sleep(1)
             status = await game.call("plan_status", timeout=30)
             if "_error" in status:
                 print("plan_status unavailable:", json.dumps(status["_error"]))
                 break
             if not status.get("running"):
                 break
-            print(f"  ... running, {status.get('steps_taken')} step(s), "
-                  f"trace {status.get('trace')!r}")
+            line = f"  {status.get('steps_taken')} step(s), trace {status.get('trace')!r}"
+            if line != previous:
+                print(line)
+                previous = line
 
         print(f"\nprogram ended: running={status.get('running')} "
               f"steps={status.get('steps_taken')}")

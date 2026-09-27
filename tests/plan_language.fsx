@@ -275,6 +275,24 @@ checkEqOne
      |> Option.map fst
      |> Option.flatten)
 
+// The bug this fixes, as the thing it was: after its last answer a plan must be
+// empty, so supply has nothing left to re-step and cannot resurrect the list. A
+// plan still holding its own answers is how a fourth answer appeared in a
+// three-answer program.
+checkEq
+    "a plan that owes answers can be drained to nothing"
+    []
+    (let mutable current = parse "goto mehmet\noptions 3, avail, esc"
+     let mutable rounds = 0
+     let mutable go = true
+     while go && rounds < 6 do
+         match Plan.owedAnswer current with
+         | Some(_, rest) ->
+             current <- rest
+             rounds <- rounds + 1
+         | None -> go <- false
+     Plan.actions current)
+
 // -- the 1-based to 0-based conversion ---------------------------------------
 
 // A plan names answer:3 for the third option. The game indexes from zero. This

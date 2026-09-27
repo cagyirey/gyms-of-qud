@@ -408,39 +408,53 @@ module Plan =
 
     // -- what a plan owes an open prompt -----------------------------------
 
-    /// Take the plan's first answer, leaving everything around it in place.
+    /// Take the plan's first answer, dropping every step that came before it.
     ///
-    /// Returns the plan rewritten without that answer, and whether one was found.
+    /// Returns the plan from just after that answer, and which answer it was.
+    ///
+    /// The prefix goes too, and that is the whole point. A prompt is open, so the
+    /// walk and the talk that led here have already run. Leaving them in place
+    /// meant supply stepped them again at the next turn between prompts, and
+    /// advanceWith's All handler spliced a continuation around a step it had not
+    /// consumed -- which put the *entire* answer list back. Measured, a program of
+    /// answer:3, answer:1, answer:2 went 3, 1, 2 and then 3 again, with the plan
+    /// holding "answer:3,answer:1,answer:2" a fourth time.
+    ///
+    /// So a prompt consumes its plan up to and including the answer. The steps
+    /// before it are not re-decided and cannot be resurrected.
     let rec private takeAnswer (plan: Plan) : (Plan * int option) option =
         match plan with
         | Answer i -> Some(All [], Some i)
         | Available -> Some(All [], None)
-        // A turn's own action, not an answer. Not ours to take here.
+        // A turn's own action. Not an answer, and not ours to run here -- but it
+        // has already happened, so it is dropped along with the rest of the
+        // prefix rather than left for supply to step a second time.
         | Act(_, _) -> None
         | Steer _ -> None
         | Branch(test, whenTrue, whenFalse) ->
             match takeAnswer whenTrue with
-            | Some(t, i) -> Some(Branch(test, t, whenFalse), i)
+            | Some(t, i) -> Some(All [ Branch(test, t, whenFalse) ], i)
             | None ->
                 match whenFalse with
                 | Some f ->
                     match takeAnswer f with
-                    | Some(f', i) -> Some(Branch(test, whenTrue, Some f'), i)
+                    | Some(f', i) -> Some(All [ Branch(test, whenTrue, Some f') ], i)
                     | None -> None
                 | None -> None
         | Repeat(untilTest, body, limit) ->
             match takeAnswer body with
-            | Some(b, i) -> Some(Repeat(untilTest, b, limit), i)
+            | Some(b, i) -> Some(All [ Repeat(untilTest, b, limit) ], i)
             | None -> None
         | All [] -> None
         | All (p :: tailPlan) ->
-            let rec go acc = function
+            // Discard the prefix: `rest` is everything from the answer onward.
+            let rec go = function
                 | [] -> None
                 | head :: rest ->
                     match takeAnswer head with
-                    | Some(h', i) -> Some(All(List.rev acc @ (h' :: rest)), i)
-                    | None -> go (head :: acc) rest
-            go [] (p :: tailPlan)
+                    | Some(h', i) -> Some(All(h' :: rest), i)
+                    | None -> go rest
+            go (p :: tailPlan)
 
     /// The answer a plan owes the prompt that is open, and the plan without it.
     ///

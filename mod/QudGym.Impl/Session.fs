@@ -127,6 +127,20 @@ module Session =
     // prompt path that could disagree with the first about what is being asked.
     let mutable offeredTitle : string = ""
     let mutable offerCancellable : bool = false
+    // Clear a plan that has run out of steps.
+    //
+    // plan_status reports `running` as "a plan is loaded", and a plan was never
+    // unloaded when it finished. So a client polling for completion was told
+    // `running: true` forever and could only stop on its own timeout -- which is
+    // why a run did five seconds of work and then hung for the rest of its
+    // budget. A finished plan is finished, and the status has to say so.
+    let private finishIfSpent () =
+        lock gate (fun () ->
+            match currentPlan with
+            | Some p when List.isEmpty (Plan.actions p) ->
+                currentPlan <- None
+                planTrace <- "finished"
+            | _ -> ())
     // A re-embark asked for by the client, performed at the next decision
     // boundary. Set on the transport thread, read and cleared on the game turn
     // thread, which is the only thread a decision boundary runs on.
@@ -1855,6 +1869,9 @@ module Session =
                 match plan with
                 | None -> None
                 | Some p ->
+                    // What the plan holds at the moment it is asked, so a repeated
+                    // or missing answer is a fact rather than an inference.
+                    say ("prompt owed: pending=" + String.Join(",", Plan.actions p))
                     match Plan.owedAnswer p with
                     // A named position. Answered only when the prompt is offering
                     // it: a plan naming a choice the game will refuse is a no-op
@@ -1862,6 +1879,7 @@ module Session =
                     | Some (Some index, rest) when Array.contains index onOffer ->
                         say ("plan answers answer:" + string index)
                         lock gate (fun () -> currentPlan <- Some rest)
+                        finishIfSpent ()
                         Some(Plan.gameIndex index)
                     | Some (Some _, _) -> None
                     // "The one the game will accept", resolved against the options
@@ -1874,6 +1892,7 @@ module Session =
                         | [| only |] ->
                             say ("plan answers the one the game will accept: answer:" + string only)
                             lock gate (fun () -> currentPlan <- Some rest)
+                            finishIfSpent ()
                             Some(Plan.gameIndex only)
                         // The plan still owes an answer and cannot resolve it, so
                         // it has NOT answered. The prompt is left for a client
