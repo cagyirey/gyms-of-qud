@@ -14,6 +14,9 @@ static class QudGymBridge
     static MethodInfo boot;
     static MethodInfo describeScreen;
     static MethodInfo describeParts;
+    // The conversation step, implemented in F#: it publishes the options the
+    // game is offering as a decision boundary and waits for the answer.
+    static MethodInfo conversationTurn;
     static MethodInfo allowPopup;
     static MethodInfo listen;
     static MethodInfo supply;
@@ -41,6 +44,7 @@ static class QudGymBridge
             Type session = impl.GetType("QudGym.Session");
             listen = session.GetMethod("listen");
             supply = session.GetMethod("supply");
+            conversationTurn = session.GetMethod("conversationTurn");
         }
         catch (Exception ex)
         {
@@ -168,6 +172,37 @@ static class QudGymBridge
         {
             Debug.Log("QudGym supply failed: " + ex.GetBaseException().Message);
             return false;
+        }
+    }
+
+    /// Run one step of a conversation in place of the game's own key loop.
+    ///
+    /// Returns the chosen option index, or -1 to let the game read input itself.
+    /// Called on the game turn thread, which is exactly where the game's own
+    /// conversation loop runs; the loop blocks there for a human's keys, and this
+    /// is the same block, except the options are published and the answer comes
+    /// back over the transport.
+    public static int ConversationTurn(string[] options, int timeoutMilliseconds)
+    {
+        Ensure();
+        if (conversationTurn == null)
+            return -1;
+        try
+        {
+            var player = XRL.The.Player;
+            if (player == null)
+                return -1;
+            int turn = 0;
+            var game = XRL.The.Game;
+            if (game != null && game.Turns > 0 && game.Turns < int.MaxValue)
+                turn = (int)game.Turns;
+            return (int)conversationTurn.Invoke(
+                null, new object[] { player, turn, timeoutMilliseconds, options });
+        }
+        catch (Exception ex)
+        {
+            Note("conversation turn failed " + ex.GetBaseException().Message);
+            return -1;
         }
     }
 

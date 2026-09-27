@@ -89,6 +89,21 @@ module Session =
     let mutable private pollMilliseconds = 20
 
     let private first = TaskCompletionSource<Slot>()
+
+    // A conversation blocks the game turn thread inside its own key loop, which
+    // is how the game itself works: a human types the keys that loop is waiting
+    // for. So a conversation cannot be resolved by a staged action on a
+    // decision boundary, because the blocked thread is the one that would
+    // publish that boundary. The options are published from inside the loop and
+    // the answer comes back over the transport, which is a pool thread and does
+    // not need the turn thread.
+    let mutable answerArrived = TaskCompletionSource<int>()
+    let mutable awaitingAnswer = false
+    // The options the open popup is offering. They come from the popup call
+    // itself, which is the authoritative list; CurrentChoices is still empty at
+    // that point, so reading it there would publish a conversation with no
+    // options and nothing to answer.
+    let mutable offeredOptions : string[] = [||]
     let private episode =
         let bytes = Array.zeroCreate 12
         use rng = Security.Cryptography.RandomNumberGenerator.Create()
@@ -575,7 +590,24 @@ module Session =
         // game builds, so the options are published verbatim as a prompt and the
         // only actions offered are the answers to it. A caller is therefore never
         // offered an answer the conversation does not contain.
-        let conversation = conversationPrompt ()
+        let conversation =
+            let fromPopup =
+                lock gate (fun () ->
+                    if offeredOptions.Length > 0 then
+                        let speaker =
+                            let ui = (gameAssembly ()).GetType("XRL.UI.ConversationUI", false)
+                            let current =
+                                if isNull ui then null
+                                else ui.GetField("CurrentConversation", BindingFlags.Static ||| BindingFlags.Public).GetValue(null)
+                            if isNull current then ""
+                            else
+                                let nm = current.GetType().GetProperty("Speaker", BindingFlags.Instance ||| BindingFlags.Public)
+                                try show (nm.GetValue(current, null)) with _ -> ""
+                        Some(speaker, offeredOptions)
+                    else None)
+            match fromPopup with
+            | some when some.IsSome -> some
+            | _ -> conversationPrompt ()
         let promptJson =
             match conversation with
             | None -> "null"
@@ -961,13 +993,19 @@ module Session =
                     | None -> say ("no route to " + string tx + "," + string ty); None
                 with _ -> None
         else if action.StartsWith("answer:") then
-            // Answer a conversation option. The number is what the player sees:
-            // the game labels its first nine options 1..9.
             let raw = action.Substring(7).Trim()
             match Int32.TryParse raw with
             | false, _ -> None
             | true, n when n >= 1 ->
-                if pressAnswerKey (n - 1) then Some("CmdNone", box null) else None
+                let delivered =
+                    lock gate (fun () ->
+                        if awaitingAnswer then
+                            answerArrived.TrySetResult (n - 1) |> ignore
+                            true
+                        else false)
+                if delivered then Some("CmdNone", box null)
+                elif pressAnswerKey (n - 1) then Some("CmdNone", box null)
+                else None
             | true, _ -> None
         else if action.StartsWith("talk:") then
             let name = action.Substring(5)
@@ -1020,6 +1058,31 @@ module Session =
                     Some("CmdMove" + facing, box null)
                 else None
             else None
+
+    /// One step of a conversation, run in place of ConversationUI.Input.
+    ///
+    /// Publishes the options the game is offering as a decision boundary, then
+    /// waits, bounded, for the answer to arrive over the transport. Returns the
+    /// chosen index, or -1 to let the game handle input itself.
+    let conversationTurn (player: obj) (turn: int) (timeoutMilliseconds: int) (options: string[]) =
+        let signal = TaskCompletionSource<int>()
+        lock gate (fun () ->
+            answerArrived <- signal
+            awaitingAnswer <- true
+            offeredOptions <- options)
+        try
+            // Publish what the player is being asked. The observation carries
+            // the options and offers only the answers to them.
+            publish player turn |> ignore
+            if signal.Task.Wait timeoutMilliseconds then
+                signal.Task.GetAwaiter().GetResult()
+            else
+                say "conversation answer timed out"
+                -1
+        finally
+            lock gate (fun () ->
+                awaitingAnswer <- false
+                offeredOptions <- [||])
 
     let supply (player: obj) (turn: int) =
         let mutable announced = -1
@@ -1242,6 +1305,35 @@ module Session =
 
     let private handleOp requestId op body =
         match op with
+        | "answer" ->
+            // Answer an open conversation directly, from the transport thread.
+            //
+            // This cannot go through the step path. A conversation is blocking
+            // the game turn thread inside its own wait, so supply -- which is
+            // what every other action is delivered through -- cannot run to pick
+            // it up. The waiting conversation is signalled here instead, and the
+            // game's own code then advances the conversation with that choice.
+            let choice =
+                match findInt "option" body with
+                | Some n -> Some n
+                | None ->
+                    match findString "action_id" body with
+                    | Some a when a.StartsWith("answer:") ->
+                        match Int32.TryParse(a.Substring(7).Trim()) with
+                        | true, n -> Some n
+                        | _ -> None
+                    | _ -> None
+            match choice with
+            | None -> fail requestId "no_option" "answer requires an option number"
+            | Some n ->
+                let delivered =
+                    lock gate (fun () ->
+                        if awaitingAnswer then
+                            answerArrived.TrySetResult (n - 1) |> ignore
+                            true
+                        else false)
+                if delivered then ok requestId (sprintf "{\"answered\":%d}" n)
+                else fail requestId "no_prompt" "No conversation is waiting for an answer"
         | "hello" -> ok requestId (capabilities ())
         | "reset" ->
             match findInt "seed" body with
