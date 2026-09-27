@@ -1056,7 +1056,14 @@ module Session =
         // "no command" silently swallowed every plain move.
         match result with
         | Some(name, null) -> box name
-        | Some pair -> box pair
+        | Some(name, arg) ->
+            // A ValueTuple, explicitly. F#'s ordinary tuple is System.Tuple and
+            // C# tests for ValueTuple<string, object>, so the two are not
+            // interchangeable: every argument-bearing command -- talk, use, get,
+            // move_to -- was dropped here and never reached PushCommand, while
+            // argument-free movement worked because it returns a bare string.
+            // Counters had already advanced, so the reply looked successful.
+            box (ValueTuple<string, obj>(name, arg))
         | None -> box null
 
     /// Enqueue a movement script and wait for the turn thread to drain it.
@@ -1201,9 +1208,11 @@ module Session =
             // changed, and a caller reading only that field cannot tell a
             // blocked move from a real one. Report the player's displacement so
             // the two are separable.
-            let before = playerPosition ()
-            let doneCount, left, rejectedCount, halted = run items 400
-            let after = playerPosition ()
+            // Once. This line used to appear twice: the batch was enqueued
+            // twice, the second set of bindings shadowed the first, and a
+            // three-action request dispatched six actions while reporting
+            // three. Counters moved before the command even reached the input
+            // queue, so nothing about the reply could have shown it.
             let beforeX, beforeY = playerPosition ()
             let doneCount, left, rejectedCount, halted = run items 400
             let afterX, afterY = playerPosition ()

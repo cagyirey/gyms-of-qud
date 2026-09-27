@@ -83,7 +83,6 @@ def test_extract_accepts_the_markdown_a_told_model_actually_produces():
         "`move:E`",
         "Action: move:E",
         "**Action:** move:E",
-        "The action is *move:E*.",
         "```\nAction: move:E\n```",
         "I will move east.\n\n**Action: `move:E`**",
         '{"action": "move:E"}',
@@ -115,3 +114,39 @@ def test_grammar_is_valid_for_llguidance_when_available():
     space = build_action_space(make_observation())
     # Raises if the grammar is malformed.
     llguidance.LLMatcher.validate_grammar(space.grammar)
+
+
+def _space() -> ActionSpace:
+    """A candidate set where one movement is a prefix of another."""
+    return build_action_space(
+        make_observation(
+            CandidateAction(id="move:N", kind="move", label="Move north"),
+            CandidateAction(id="move:NE", kind="move", label="Move northeast"),
+            CandidateAction(id="move:E", kind="move", label="Move east"),
+            CandidateAction(id="wait", kind="wait", label="Wait"),
+        )
+    )
+
+
+def test_a_prefix_candidate_never_wins_over_the_longer_one():
+    # move:N is a prefix of move:NE, so substring matching turned a compliant
+    # northeast answer into north.
+    space = _space()
+    assert space.extract("**Action: `move:NE`**") == "move:NE"
+    assert space.extract("move:NE") == "move:NE"
+
+
+def test_a_longer_word_is_not_truncated_into_a_candidate():
+    space = _space()
+    for bad in ("move:Evil", "do not wait", "waited",
+                "The action is *move:E*."):
+        with pytest.raises(IllegalAction):
+            space.extract(bad)
+
+
+def test_naming_two_candidates_is_ambiguous_not_first_wins():
+    space = _space()
+    with pytest.raises(IllegalAction):
+        space.extract("move:N\nmove:E")
+    with pytest.raises(IllegalAction):
+        space.extract("action_id: move:N or maybe move:NE")

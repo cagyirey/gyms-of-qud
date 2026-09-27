@@ -156,6 +156,12 @@ static class QudGymBridge
                 ConsoleLib.Console.Keyboard.PushCommand(pair.Item1, pair.Item2);
                 return true;
             }
+            // Report a shape we do not recognise. Silently returning false here
+            // is what hid the tuple mismatch: F# boxed a System.Tuple, this
+            // tested for a ValueTuple, every argument-bearing command was
+            // dropped, and the harness counters had already advanced, so the
+            // reply read as a success that never reached the game.
+            Note("supply command shape " + command.GetType().FullName + " dropped");
             return false;
         }
         catch (Exception ex)

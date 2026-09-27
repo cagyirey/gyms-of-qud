@@ -31,8 +31,15 @@ class QudEnv:
         try:
             result = call()
         except TransportUncertain as exc:
-            if exc.replayable:
-                self.uncertain = True
+            # Any uncertain outcome blocks the next mutation, whether or not the
+            # transport can replay it. A live request that was sent and whose
+            # reply was lost may already have committed, and `replayable=False`
+            # only means there is no way to re-derive the answer -- not that the
+            # world is in a known state. Guarding only the replayable case let a
+            # possibly-applied mutation be followed by another one.
+            self.uncertain = True
+            if not exc.replayable:
+                self.reward_unknown = True
             raise
         return self._accept(result)
 

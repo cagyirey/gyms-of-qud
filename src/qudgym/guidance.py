@@ -66,60 +66,101 @@ class ActionSpace:
     def extract(self, text: str) -> str:
         """Pull the action id out of a model response.
 
-        Generous about decoration, strict about meaning. A model that was told
-        to reply with an action id will often wrap that id in whatever the
-        markdown habit suggests -- `**Action: `move:E`**`, a fenced block, a
-        JSON object, "action_id: x", a bullet. All of those carry exactly one
-        action id and are accepted, because rejecting them would reject a
-        compliant answer and cost a retry for nothing.
+        Wrappers are normalised; nothing is guessed. A model told to reply with
+        an action id will wrap it in whatever the markdown habit suggests -- a
+        code fence, a bullet, bold, an ``action_id:`` label -- and those are
+        accepted, because rejecting them would reject a compliant answer.
 
-        What is refused is prose that does not name a candidate. "I pick open"
-        is not coerced into "answer:open": a wrong action is far more expensive
-        here than a retry, and guessing is how a wrong action happens.
+        What is never done is looking for a candidate *inside* a longer string.
+        An earlier version did, and because one candidate is a prefix of another
+        it silently chose the wrong action::
+
+            **Action: `move:NE`**  ->  move:N
+            move:Evil              ->  move:E
+            do not wait            ->  wait
+
+        A northeast answer became north, and a refusal became a wait. After the
+        wrappers are stripped, the remainder must equal a candidate exactly, and
+        a reply that resolves to two different candidates is ambiguous rather
+        than first-one-wins.
         """
-        candidate = text.strip()
-        if "```" in candidate:
-            lines = [ln for ln in candidate.splitlines() if not ln.strip().startswith("```")]
-            candidate = "\n".join(lines).strip()
-        if candidate in self.candidates:
-            return candidate
+        body = text.strip()
+        if body.startswith("```"):
+            body = "\n".join(
+                line for line in body.splitlines() if not line.strip().startswith("```")
+            ).strip()
+
+        payload = None
         try:
-            payload = json.loads(candidate)
+            payload = json.loads(body)
         except (ValueError, TypeError):
             payload = None
         if isinstance(payload, dict):
             for key in ("action_id", "action", "id", "choice", "answer"):
                 value = payload.get(key)
-                if isinstance(value, str) and self._match(value):
-                    return self._match(value)  # type: ignore[return-value]
-        for line in candidate.splitlines():
-            stripped = line.strip()
-            found = self._match(stripped)
-            if found:
-                return found
-            # "Action: move:E", "action_id = move:E", "**Move** -> move:E".
-            for sep in (":", "=", "->"):
-                if sep in stripped:
-                    found = self._match(stripped.split(sep, 1)[1])
+                if isinstance(value, str):
+                    found = self._exact(value)
                     if found:
                         return found
-        raise IllegalAction(candidate[:120], self.action_ids)
+            raise IllegalAction(f"no candidate in JSON response: {body[:120]!r}",
+                                self.action_ids)
+
+        # Every line is examined before anything is chosen, so a reply naming two
+        # candidates is reported as ambiguous instead of resolved by line order.
+        named: list[str] = []
+        for line in body.splitlines():
+            found = self._from_line(line)
+            if found and found not in named:
+                named.append(found)
+        if len(named) == 1:
+            return named[0]
+        if len(named) > 1:
+            raise IllegalAction(
+                f"reply names more than one action: {sorted(named)}", self.action_ids
+            )
+        raise IllegalAction(body[:120], self.action_ids)
 
     # Markdown emphasis, code ticks, quotes and trailing sentence punctuation
-    # are all decoration around the id rather than part of it.
+    # are decoration around the id, not part of it.
     _DECORATION = "*_`\"'.,:;!?()[]{}"
 
-    def _match(self, token: str) -> str | None:
-        """Resolve one token to a candidate, or None if it names no candidate."""
-        if not token:
-            return None
-        cleaned = token.strip().strip(self._DECORATION).strip()
-        if cleaned in self.candidates:
-            return cleaned
-        # "**Move east**" or "`move:E`" where the id is embedded in a phrase.
-        for candidate in self.candidates:
-            if candidate in cleaned and len(cleaned) <= len(candidate) + 24:
-                return candidate
+    @classmethod
+    def _strip_decoration(cls, token: str) -> str:
+        return token.strip().strip(cls._DECORATION).strip()
+
+    @classmethod
+    def _strip_list_marker(cls, line: str) -> str:
+        """Remove a leading bullet or ordinal: "- x", "* x", "1. x", "2) x"."""
+        text = line.strip()
+        if text[:1] in ("-", "*", "+"):
+            return text[1:].strip()
+        i = 0
+        while i < len(text) and text[i].isdigit():
+            i += 1
+        if i and i < len(text) and text[i] in ".)":
+            return text[i + 1:].strip()
+        return text
+
+    def _exact(self, token: str) -> str | None:
+        """A candidate equal to the token, or None. Never a substring test."""
+        cleaned = self._strip_decoration(token)
+        return cleaned if cleaned in self.candidates else None
+
+    def _from_line(self, line: str) -> str | None:
+        """Resolve one line, allowing only the documented wrappers."""
+        direct = self._exact(self._strip_list_marker(line))
+        if direct:
+            return direct
+        # "Action: move:E", "action_id = move:E", "**Move** -> move:E". The tail
+        # after the first separator must equal a candidate once unwrapped.
+        for sep in (":", "=", "->"):
+            found_at = line.find(sep)
+            if found_at < 0:
+                continue
+            tail = self._strip_list_marker(line[found_at + len(sep):])
+            found = self._exact(tail)
+            if found:
+                return found
         return None
 
     def retry_message(self, rejected: str) -> str:
