@@ -442,9 +442,21 @@ module Session =
                         (jsonString (verb + " " + name))
                         (jsonString name))
 
+        // Only verbs the harness can actually perform.
+        //
+        // quests, journal and history were advertised here while commandOf had no
+        // mapping for them, so the action list offered a caller three things that
+        // all resolved to a pushed window and consumed no turn. An action the
+        // harness advertises but cannot perform is worse than one it omits: the
+        // caller has no way to tell the two apart, and the appearance of support
+        // is exactly what made the window-blocking look like a game bug rather than
+        // a mismatch between two tables.
+        //
+        // Their content is already in the observation -- the quest list in quests,
+        // the journal alongside it, the message log in messages -- so nothing is
+        // lost by not offering a verb that opens a window.
         let consoleVerbs =
-            [| ("look", "Look"); ("quests", "Quests"); ("journal", "Journal")
-               ("history", "Message history"); ("wait", "Wait one turn") |]
+            [| ("look", "Look"); ("wait", "Wait one turn") |]
         for (cid, label) in consoleVerbs do
             parts.Add(sprintf
                 "{\"id\":%s,\"kind\":\"info\",\"label\":%s,\"arguments\":{}}"
@@ -1512,8 +1524,16 @@ module Session =
         // popup does -- so asking what quest the player was on left a window open and
         // consumed no turn. The quest list is part of the observation now, so the
         // question is answered by looking rather than by opening something.
-        elif action = "journal" then Some("CmdJournal", box null)
-        elif action = "history" then Some("CmdMessageHistory", box null)
+        // 'journal' and 'history' are absent for the same reason 'quests' is.
+        //
+        // Both push a window: CmdJournal sets Screens.CurrentScreen and calls
+        // Screens.Show, and CmdMessageHistory calls Messages.Show. A pushed window
+        // blocks exactly as a popup does, and the turn thread parks inside it, so
+        // every later action stops being consumed. Verified rather than assumed:
+        // after 'journal' a following 'west' consumed 0, and after 'history' the
+        // same. The journal is a tab of the screen quests now comes from, and the
+        // message log is already in the observation's messages, so in both cases
+        // the content was already readable and only the blocking was left over.
         elif action.StartsWith("wield:") then
             // wield:<item> -- equip without naming a slot, which is what makes the
             // game ask which slot.
@@ -1899,6 +1919,15 @@ module Session =
     /// whether an action happened.
     let runScript (actions: string[]) (stallMilliseconds: int) =
         let mutable doneCount = 0
+        // Rejected means staged and then unresolvable: the action reached a
+        // boundary and no command came of it.
+        //
+        // This counter was declared and never incremented, so every script reported
+        // rejected=0 and a caller could not distinguish an action that happened
+        // from one that was silently dropped. "journal" reported consumed=1
+        // rejected=0 while opening a window and taking no turn, and an unknown
+        // action like "zzz-not-an-action" reported exactly the same. A number that
+        // is always zero is worse than no number, because it looks like a fact.
         let mutable rejectedCount = 0
         let mutable left = actions.Length
         let mutable halted = false
@@ -1925,7 +1954,20 @@ module Session =
                     // parking on it, which is what the old scheduler did when
                     // its queue was non-empty and nothing was being consumed.
                     if slot.Onward.Task.Wait(stallMilliseconds) then
-                        doneCount <- doneCount + 1
+                        // The next boundary means the action was taken, not that it
+                        // was understood. An action neither tryDirect nor commandOf
+                        // recognises consumes a boundary and does nothing, so the
+                        // difference is read back off the slot here rather than
+                        // inferred from the fact that the turn advanced.
+                        let resolved =
+                            match slot.Action with
+                            | Some a -> tryDirect (livePlayer ()) a |> Option.isSome
+                                          || commandOf a (livePlayer ()) |> Option.isSome
+                            | None -> true
+                        if resolved then
+                            doneCount <- doneCount + 1
+                        else
+                            rejectedCount <- rejectedCount + 1
                         left <- left - 1
                     else
                         left <- 0
