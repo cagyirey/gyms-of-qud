@@ -354,6 +354,12 @@ internal static class Queries
             "GetActiveConversationBlueprint");
         Add("Qud.UI.WorldGenerationScreen",
             "Show");
+
+        // Taking something out of a container. ShowPicker is asked which item to
+        // take and returns the choice, so it is gated like any other question, and
+        // the style is what distinguishes a container from an ability's part list.
+        Add("XRL.UI.PickItem", "ShowPicker", "ShowPickerAsync");
+        Add("XRL.UI.PickItem+PickItemDialogStyle", "SelectItemDialog", "StoreItemDialog", "GetItemDialog");
         Add("Qud.UI.SingletonWindowBase",
             "Show");
         Add("XRL.UI.DialogResult",

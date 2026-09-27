@@ -10251,6 +10251,125 @@
       ]
     },
     {
+      "type_name": "XRL.UI.PickItem",
+      "found": true,
+      "attributes": "Public, BeforeFieldInit",
+      "base_type": "System.Object",
+      "interfaces": [],
+      "member_name_filters": [
+        "ShowPicker",
+        "ShowPickerAsync"
+      ],
+      "declared_members_only": true,
+      "members_truncated": false,
+      "matched_members": 3,
+      "members": [
+        {
+          "kind": "method",
+          "name": "ShowPicker",
+          "attributes": "Public, Static, HideBySig",
+          "return_type": "XRL.World.GameObject",
+          "parameters": [
+            "System.Collections.Generic.IList\u00601\u003CXRL.World.GameObject\u003E",
+            "Boolean\u0026",
+            "String",
+            "XRL.UI.PickItem\u002BPickItemDialogStyle",
+            "XRL.World.GameObject",
+            "XRL.World.GameObject",
+            "XRL.World.Cell",
+            "String",
+            "Boolean",
+            "System.Func\u00601\u003CSystem.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E\u003E",
+            "Boolean",
+            "Boolean",
+            "Boolean"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "ShowPicker",
+          "attributes": "Public, Static, HideBySig",
+          "return_type": "XRL.World.GameObject",
+          "parameters": [
+            "System.Collections.Generic.IList\u00601\u003CXRL.World.GameObject\u003E",
+            "String",
+            "XRL.UI.PickItem\u002BPickItemDialogStyle",
+            "XRL.World.GameObject",
+            "XRL.World.GameObject",
+            "XRL.World.Cell",
+            "String",
+            "Boolean",
+            "System.Func\u00601\u003CSystem.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E\u003E",
+            "Boolean",
+            "Boolean",
+            "Boolean"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "ShowPickerInternal",
+          "attributes": "Public, HideBySig",
+          "return_type": "XRL.World.GameObject",
+          "parameters": [
+            "System.Collections.Generic.IList\u00601\u003CXRL.World.GameObject\u003E",
+            "Boolean\u0026",
+            "String",
+            "XRL.UI.PickItem\u002BPickItemDialogStyle",
+            "XRL.World.GameObject",
+            "XRL.World.GameObject",
+            "XRL.World.Cell",
+            "Boolean",
+            "String",
+            "Boolean",
+            "Int32",
+            "Int32",
+            "System.Func\u00601\u003CSystem.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E\u003E",
+            "Boolean",
+            "Boolean",
+            "Boolean"
+          ],
+          "generic_parameters": 0
+        }
+      ]
+    },
+    {
+      "type_name": "XRL.UI.PickItem\u002BPickItemDialogStyle",
+      "found": true,
+      "attributes": "NestedPublic, Sealed",
+      "base_type": "System.Enum",
+      "interfaces": [],
+      "member_name_filters": [
+        "SelectItemDialog",
+        "StoreItemDialog",
+        "GetItemDialog"
+      ],
+      "declared_members_only": true,
+      "members_truncated": false,
+      "matched_members": 3,
+      "members": [
+        {
+          "kind": "field",
+          "name": "SelectItemDialog",
+          "attributes": "Public, Static, Literal, HasDefault",
+          "field_type": "XRL.UI.PickItem\u002BPickItemDialogStyle"
+        },
+        {
+          "kind": "field",
+          "name": "StoreItemDialog",
+          "attributes": "Public, Static, Literal, HasDefault",
+          "field_type": "XRL.UI.PickItem\u002BPickItemDialogStyle"
+        },
+        {
+          "kind": "field",
+          "name": "GetItemDialog",
+          "attributes": "Public, Static, Literal, HasDefault",
+          "field_type": "XRL.UI.PickItem\u002BPickItemDialogStyle"
+        }
+      ]
+    },
+    {
       "type_name": "Qud.UI.SingletonWindowBase",
       "found": false
     },
