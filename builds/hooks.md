@@ -240,3 +240,38 @@ has to be driven the way a player drives it, through the object's own action, an
 observed afterwards by what the new zone publishes. That is a materially different
 mechanism from anything in the harness today, which is why `goto` naming a
 distant place cannot work and must not be made to.
+
+## Trade and looting both go through two blocking surfaces
+
+Neither exists in the harness yet, and both were found by reading the game's own
+trade path rather than by trying it.
+
+### `Popup.ShowYesNo` — gated now
+
+`XRL.UI.TradeUI.ShowTradeScreen` will not begin a trade until the water debt is
+settled, and it asks with `Popup.ShowYesNo` first. That method was only
+*observed*, never gated, so it blocked: a trade could not start. It is a question
+with exactly two answers, so it is now answered through `MenuTurn` — the same
+publication, escape rule and default a menu already uses — and the game's
+`callback` is invoked so a caller that reads the callback rather than the return
+value still gets its result.
+
+This is not trade-specific. `PickItem` raises `ShowYesNo` for the weight limit
+when taking a stack, so looting hit the same wall.
+
+### `XRL.UI.PickItem.ShowPicker` — the container and inventory surface
+
+Both `g` on a chest and the inventory go through
+`PickItem.ShowPicker(IList<GameObject> Items, ...)`, which returns the chosen
+`GameObject`. It is a screen with its own input loop, and it is the third shape —
+a browsable window — except that it *returns* a selection, so it can be gated the
+way `PickOption` is rather than read ahead of.
+
+Two overloads exist, differing by a `ref bool RequestInterfaceExit`; the container
+path uses the one without it. Gating this needs care because it is also reached
+from equipping, trading and dropping, so a gate that assumes "a chest" would
+change unrelated behaviour. `ShowContext` and `PickItemDialogStyle` are what
+distinguish the call sites, and neither has been checked yet.
+
+Not implemented. Recorded so the next attempt starts from the overload and the
+style rather than from `take:` failing against a blocked screen.

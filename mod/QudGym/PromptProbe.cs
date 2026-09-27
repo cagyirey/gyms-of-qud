@@ -48,14 +48,55 @@ static class QudGymPromptProbe
         }
     }
 
+    // A confirmation is a question with exactly two answers, so it is answered the
+    // way a question is: published, and the game's own code run on the answer.
+    //
+    // It was only observed, never gated, and it blocks. That put a wall in front of
+    // every confirmation in the game, and the first one the quest runs into is
+    // trade: TradeUI.ShowTradeScreen asks whether to hand over the water debt
+    // before it will trade at all, so a trade could not begin.
+    //
+    // Reusing MenuTurn is the point. The escape rule, the default and the
+    // publication are the same ones a menu already uses, rather than a second
+    // question path that could disagree with the first about what is on offer.
     [HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowYesNo),
         new System.Type[] { typeof(string), typeof(string), typeof(bool), typeof(XRL.UI.DialogResult),
                             typeof(System.Action<XRL.UI.DialogResult>) })]
-    static class ShowYesNoHook
+    static class ShowYesNoGate
     {
-        static void Prefix(string Message, string Sound)
+        static bool Prefix(ref XRL.UI.DialogResult __result, string Message, bool AllowEscape,
+                           XRL.UI.DialogResult defaultResult, System.Action<XRL.UI.DialogResult> callback)
         {
-            Record("yesno:" + (Message ?? "?"), Thread.CurrentThread, null);
+            try
+            {
+                var options = new[] { "Yes", "No" };
+                QudGymBridge.Note("yesno '" + (Message ?? "") + "' escape=" + AllowEscape
+                    + " default=" + defaultResult);
+                // A menu's escape answer is -1, and the game's own escape answer is
+                // its declared default. Mapping one onto the other keeps a
+                // confirmation that was walked away from behaving as the game says.
+                int chosen = QudGymBridge.MenuTurn("", Message ?? "", options, AllowEscape, -1, 120000);
+                var result = chosen switch
+                {
+                    0 => XRL.UI.DialogResult.Yes,
+                    1 => XRL.UI.DialogResult.No,
+                    _ => defaultResult,
+                };
+                QudGymBridge.Note("yesno chose " + result);
+                // Some callers pass a callback instead of reading the return value,
+                // so skipping the original without calling it would discard their
+                // result. The same reason PickOptionGate invokes OnResult.
+                if (callback != null)
+                    callback(result);
+                __result = result;
+                return false;
+            }
+            catch (System.Exception ex)
+            {
+                QudGymBridge.Note("yesno gate failed " + ex.GetBaseException().Message);
+                __result = defaultResult;
+                return false;
+            }
         }
     }
 }
