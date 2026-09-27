@@ -196,13 +196,56 @@ static class QudGymBridge
             var game = XRL.The.Game;
             if (game != null && game.Turns > 0 && game.Turns < int.MaxValue)
                 turn = (int)game.Turns;
+            // A conversation has no title and cannot be cancelled, and -1 is the
+            // answer when nobody replies, which is what this always did.
             return (int)conversationTurn.Invoke(
-                null, new object[] { player, turn, timeoutMilliseconds, options });
+                null,
+                new object[] { player, turn, timeoutMilliseconds, "", "", false, -1, options });
         }
         catch (Exception ex)
         {
             Note("conversation turn failed " + ex.GetBaseException().Message);
             return -1;
+        }
+    }
+
+    /// Publish a PickOption menu and wait for the choice. Returns the chosen index,
+    /// or -1 if the caller cancelled and the game permitted it.
+    ///
+    /// The same turn mechanism as a conversation, because a menu is the same shape
+    /// of question: the game builds a list, blocks until something picks, then acts
+    /// on the index. The difference is only that a menu has a title and may allow
+    /// the player to walk away, so both are passed through rather than assumed.
+    public static int MenuTurn(string title, string intro, string[] options,
+                               bool allowEscape, int defaultSelected, int timeoutMilliseconds)
+    {
+        Ensure();
+        if (conversationTurn == null)
+            return defaultSelected;
+        try
+        {
+            var player = XRL.The.Player;
+            if (player == null)
+                return defaultSelected;
+            int turn = 0;
+            var game = XRL.The.Game;
+            if (game != null && game.Turns > 0 && game.Turns < int.MaxValue)
+                turn = (int)game.Turns;
+            // The fallback is the game's own default selection, not -1: -1 is not a
+            // legal answer to a menu that forbids escape, so a timeout must not
+            // invent one.
+            return (int)conversationTurn.Invoke(
+                null,
+                new object[]
+                {
+                    player, turn, timeoutMilliseconds, title ?? "", intro ?? "",
+                    allowEscape, defaultSelected, options ?? new string[0]
+                });
+        }
+        catch (Exception ex)
+        {
+            Note("menu turn failed " + ex.GetBaseException().Message);
+            return defaultSelected;
         }
     }
 

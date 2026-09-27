@@ -104,6 +104,11 @@ module Session =
     // that point, so reading it there would publish a conversation with no
     // options and nothing to answer.
     let mutable offeredOptions : string[] = [||]
+    // A menu prompt carries a title and may permit cancelling; a conversation
+    // carries neither. Same mechanism, so same state, rather than a second
+    // prompt path that could disagree with the first about what is being asked.
+    let mutable offeredTitle : string = ""
+    let mutable offerCancellable : bool = false
     let private episode =
         let bytes = Array.zeroCreate 12
         use rng = Security.Cryptography.RandomNumberGenerator.Create()
@@ -620,24 +625,35 @@ module Session =
                             else
                                 let nm = current.GetType().GetProperty("Speaker", BindingFlags.Instance ||| BindingFlags.Public)
                                 try show (nm.GetValue(current, null)) with _ -> ""
-                        Some(speaker, offeredOptions)
+                        Some(speaker, offeredTitle, offeredOptions, offerCancellable)
                     else None)
             match fromPopup with
             | some when some.IsSome -> some
-            | _ -> conversationPrompt ()
+            | _ ->
+                // The legacy path reads the open conversation's choices rather
+                // than the call that raised it. A conversation has no title and
+                // cannot be cancelled, so it is normalised into the same shape.
+                match conversationPrompt () with
+                | Some(speaker, options) -> Some(speaker, "", options, false)
+                | None -> None
         let promptJson =
             match conversation with
             | None -> "null"
-            | Some (speaker, options) ->
+            | Some (speaker, title, options, cancellable) ->
                 let body =
                     if options.Length > 0 then String.concat " / " options else "(no options yet)"
+                let heading =
+                    if title = "" then speaker
+                    elif speaker = "" then title
+                    else title + " -- " + speaker
                 sprintf
-                    "{\"kind\":\"choice\",\"text\":%s,\"options\":[%s]}"
-                    (jsonString (if speaker = "" then body else speaker + ": " + body))
+                    "{\"kind\":\"choice\",\"text\":%s,\"options\":[%s],\"allow_cancel\":%b}"
+                    (jsonString (if heading = "" then body else heading + ": " + body))
                     (String.concat "," (Array.map jsonString options))
+                    cancellable
         let actions =
             match conversation with
-            | Some (_, options) when options.Length > 0 ->
+            | Some (_, _, options, cancellable) when options.Length > 0 ->
                 let answers =
                     options
                     |> Array.mapi (fun i text ->
@@ -646,8 +662,16 @@ module Session =
                             (jsonString ("answer:" + string (i + 1)))
                             (jsonString text)
                             (i + 1))
-                    |> String.concat ","
-                "[" + answers + "]"
+                // Offered only when the game itself permits walking away, so the
+                // list stays a description of what is actually possible.
+                let withCancel =
+                    if not cancellable then answers
+                    else
+                        Array.append
+                            answers
+                            [| sprintf
+                                   "{\"id\":\"answer:0\",\"kind\":\"answer\",\"label\":\"(cancel)\",\"arguments\":{\"option\":0}}" |]
+                "[" + (String.concat "," withCancel) + "]"
             | _ -> actionsJsonSafe player
         let phase = if conversation.IsSome then "prompt" else "command"
         id, sprintf
@@ -1091,12 +1115,23 @@ module Session =
     /// Publishes the options the game is offering as a decision boundary, then
     /// waits, bounded, for the answer to arrive over the transport. Returns the
     /// chosen index, or -1 to let the game handle input itself.
-    let conversationTurn (player: obj) (turn: int) (timeoutMilliseconds: int) (options: string[]) =
+    /// Publish a prompt and wait for the answer.
+    ///
+    /// One mechanism for every prompt the game raises through a call: a
+    /// conversation (no title, no cancelling) and a PickOption menu (title, and
+    /// cancelling exactly when the game would allow it). `fallback` is the answer
+    /// used if nobody replies, which is the value the game itself would have
+    /// started from: -1 for a conversation, and the menu's own default selection
+    /// for a menu, because -1 is not a legal answer to a menu that forbids escape.
+    let conversationTurn (player: obj) (turn: int) (timeoutMilliseconds: int) (title: string)
+        (intro: string) (allowEscape: bool) (fallback: int) (options: string[]) =
         let signal = TaskCompletionSource<int>()
         lock gate (fun () ->
             answerArrived <- signal
             awaitingAnswer <- true
-            offeredOptions <- options)
+            offeredOptions <- options
+            offeredTitle <- title
+            offerCancellable <- allowEscape)
         try
             // Publish what the player is being asked. The observation carries
             // the options and offers only the answers to them.
@@ -1104,12 +1139,14 @@ module Session =
             if signal.Task.Wait timeoutMilliseconds then
                 signal.Task.GetAwaiter().GetResult()
             else
-                say "conversation answer timed out"
-                -1
+                say "prompt answer timed out"
+                fallback
         finally
             lock gate (fun () ->
                 awaitingAnswer <- false
-                offeredOptions <- [||])
+                offeredOptions <- [||]
+                offeredTitle <- ""
+                offerCancellable <- false)
 
     let supply (player: obj) (turn: int) =
         let mutable announced = -1
@@ -1356,11 +1393,24 @@ module Session =
                 let delivered =
                     lock gate (fun () ->
                         if awaitingAnswer then
-                            answerArrived.TrySetResult (n - 1) |> ignore
-                            true
+                            // 0 and below mean cancel. Only offered when the game
+                            // permits it, so a prompt that forbids escape cannot be
+                            // talked out of; -1 is the value the game itself returns
+                            // for a cancelled menu.
+                            if n <= 0 then
+                                if offerCancellable then
+                                    answerArrived.TrySetResult -1 |> ignore
+                                    true
+                                else false
+                            else
+                                answerArrived.TrySetResult (n - 1) |> ignore
+                                true
                         else false)
                 if delivered then ok requestId (sprintf "{\"answered\":%d}" n)
-                else fail requestId "no_prompt" "No conversation is waiting for an answer"
+                else
+                    fail requestId
+                        "no_prompt"
+                        (if n <= 0 then "This prompt cannot be cancelled" else "No prompt is waiting for an answer")
         | "hello" -> ok requestId (capabilities ())
         | "reset" ->
             match findInt "seed" body with

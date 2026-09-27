@@ -74,6 +74,14 @@ class Prompt(Model):
     # that cannot see them cannot answer, and one shown a paraphrase may answer
     # the wrong thing. Empty when the prompt is not a choice.
     options: tuple[str, ...] = ()
+    # Whether the game itself would let the player walk away from this prompt.
+    #
+    # PickOption carries an AllowEscape flag, and a cancelled menu returns -1
+    # rather than an index, so a caller has to be able to express "no". Offering
+    # answer:0 only when the game permits it keeps the action list a description
+    # of what is actually possible, the same reason options are published rather
+    # than summarised.
+    allow_cancel: bool = False
 
 
 class Observation(Model):

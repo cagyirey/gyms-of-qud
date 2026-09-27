@@ -202,6 +202,80 @@ static class NotificationBlockSpaceGate
     static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
 }
 
+// A menu the player has to navigate is a question the harness can answer without
+// the menu being drawn.
+//
+// Popup.PickOption takes a list of options and returns the chosen index, which is
+// the same shape as ShowConversation: the game builds the list, blocks until
+// something picks, then acts on the index. Eighty call sites use it -- equipment
+// and container pickers, wish outcomes, cybernetics, the Wishing well's choices --
+// so one hook retires all of them. It does not delegate to ShowConversation, so the
+// conversation hook does not already cover it; it builds and waits on its own.
+//
+// The original is skipped and the index is supplied instead, so the game still
+// receives its own answer and runs its own code on it. Two details of the original
+// are reproduced rather than assumed, because dropping either would be a quiet
+// behavioural change in someone else's code:
+//
+//   * OnResult is invoked by the original with the chosen index, before returning.
+//     Some callers pass a callback instead of reading the return value, so skipping
+//     the original without calling it would silently discard their result.
+//   * A cancelled menu returns -1, and only when the caller passed AllowEscape.
+//     Cancel is therefore offered to the caller under exactly that condition, so a
+//     menu that forbids escape cannot be talked out of, and the timeout fallback is
+//     the game's own DefaultSelected rather than -1, which would not be a legal
+//     answer to such a menu.
+//
+// A menu with no options is left alone: there is no question to publish, and the
+// original has its own handling for it.
+[HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.PickOption))]
+static class PickOptionGate
+{
+    static bool Prefix(ref int __result, string Title, string Intro,
+                       System.Collections.Generic.IReadOnlyList<string> Options,
+                       System.Action<int> OnResult, int DefaultSelected, bool AllowEscape)
+    {
+        try
+        {
+            if (Options == null || Options.Count == 0)
+                return true;
+
+            var options = new string[Options.Count];
+            for (int i = 0; i < Options.Count; i++)
+                options[i] = Options[i] ?? "";
+            int fallback = AllowEscape ? -1 : DefaultSelected;
+
+            QudGymBridge.Note("menu '" + (Title ?? "") + "' options=" + options.Length
+                + " escape=" + AllowEscape + " default=" + DefaultSelected);
+            for (int i = 0; i < options.Length && i < 12; i++)
+                QudGymBridge.Note("  option: " + options[i]);
+
+            int chosen = QudGymBridge.MenuTurn(Title, Intro, options, AllowEscape,
+                                               DefaultSelected, 120000);
+            if (chosen < -1 || chosen >= options.Length)
+            {
+                // An answer outside the list would be the game's own index into a
+                // list it never offered. Fall back rather than pass it on.
+                QudGymBridge.Note("menu answer " + chosen + " out of range; using default");
+                chosen = fallback;
+            }
+
+            QudGymBridge.Note("menu chose " + chosen
+                + (chosen >= 0 && chosen < options.Length ? " -> " + options[chosen] : " (cancelled)"));
+            if (OnResult != null)
+                OnResult(chosen);
+            __result = chosen;
+            return false;
+        }
+        catch (System.Exception ex)
+        {
+            QudGymBridge.Note("menu gate failed " + ex.GetBaseException().Message);
+            __result = DefaultSelected;
+            return true;
+        }
+    }
+}
+
 // Quest notices are the case that actually blocked: accepting Mehmet's quest put
 // up "You have received a new quest, What's Eating the Watervine?!" waiting for
 // space, with nothing to decide.
