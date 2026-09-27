@@ -1721,11 +1721,48 @@ module Session =
             // Publish what the player is being asked. The observation carries
             // the options and offers only the answers to them.
             publish player turn |> ignore
-            if signal.Task.Wait timeoutMilliseconds then
-                signal.Task.GetAwaiter().GetResult()
-            else
-                say "prompt answer timed out"
-                fallback
+            // Let a plan answer its own conversation.
+            //
+            // A prompt is published from inside this function, not from supply, so
+            // the plan -- which is consulted only by supply -- never saw it. A plan
+            // could walk to a target, talk, and then sit at the first question
+            // forever, which is why conversations were being driven from outside by
+            // hand.
+            //
+            // So when the plan's next step is an answer, it is taken here, from the
+            // same thread that is already blocked waiting for one. An answer is
+            // delivered by setting the result, not by pushing a key, so this does
+            // not re-enter the transport.
+            let answered =
+                let plan = lock gate (fun () -> currentPlan)
+                match plan with
+                | Some p ->
+                    // Only the answers the game is offering count as available, so a
+                    // plan naming one that is not on offer does not get to press it.
+                    let offered (a: string) = a.StartsWith("answer:")
+                    let view: Plan.View =
+                        { Plan.Player = player
+                          Plan.Nearby = []
+                          Plan.Entities = [] }
+                    match Plan.advance offered view p with
+                    | Plan.Stepped(action, rest) when action.StartsWith("answer:") ->
+                        let index = Int32.Parse(action.Substring(7))
+                        say ("plan answers " + action)
+                        lock gate (fun () -> currentPlan <- Some rest)
+                        Some index
+                    | _ -> None
+                | None -> None
+            match answered with
+            // The index is returned directly rather than through the signal: the
+            // transport is the only other writer, and waiting on a task this thread
+            // is itself about to satisfy is a race with a thread that is not running.
+            | Some index -> index
+            | None ->
+                if signal.Task.Wait timeoutMilliseconds then
+                    signal.Task.GetAwaiter().GetResult()
+                else
+                    say "prompt answer timed out"
+                    fallback
         finally
             lock gate (fun () ->
                 awaitingAnswer <- false
