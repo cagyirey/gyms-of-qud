@@ -35,6 +35,16 @@ module Session =
         member val Action: string option = None with get, set
         member val Consumed: bool = false with get, set
         member val Onward = TaskCompletionSource<Slot>() with get
+        // Whether the body this slot carries was captured while a prompt was open.
+        //
+        // A prompt is published from inside publish, so the slot's observation is a
+        // snapshot of the moment the question was asked. Once the answer is
+        // delivered the question is over, but the string still says it is open, and
+        // observe -- which serves this string -- would keep reporting a finished
+        // dialogue as a live prompt. The flag records that the body is known to
+        // describe a prompt, so observe can refuse it instead of serving a stale
+        // boundary as though it were current.
+        member val PromptBody: bool = false with get, set
         member _.Id = id
         member _.Index = index
         member _.Turn = turn
@@ -1010,6 +1020,10 @@ module Session =
         let index = lock gate (fun () -> decisions)
         let id, body = observation player turn index
         let slot = Slot(id, index, turn, body)
+        // Recorded from the state that produced the body, not parsed back out of
+        // it: the body is a string, and re-reading it to decide whether it is
+        // current is how the staleness happened in the first place.
+        slot.PromptBody <- lock gate (fun () -> awaitingAnswer)
         lock gate (fun () ->
             match waiting with
             | Some previous -> previous.Onward.TrySetResult(slot) |> ignore
@@ -1843,6 +1857,25 @@ module Session =
             if not resetUsed then fail requestId "reset_required" "Reset before observing"
             else
                 match currentWaiting () with
+                // A prompt body is served only while the prompt is still open.
+                //
+                // The body is a snapshot taken when the question was asked, so once
+                // the answer has been delivered it describes a dialogue that has
+                // already advanced. Serving it then is what produced a finished
+                // conversation reported as a live prompt, and it misled the caller
+                // five times: it answered a prompt that no longer existed, and the
+                // game's own no_prompt refusal was the only thing that caught it.
+                //
+                // Refusing is the honest answer, not a fresh body. Recomputing here
+                // would report a decision boundary that has not happened -- no turn
+                // has ended, so there is nothing new to observe -- and inventing one
+                // is how a stale read turns into a fabricated one. The caller is
+                // told to re-observe, and the next real boundary will carry the
+                // state after the answer.
+                | Some slot when slot.PromptBody && not (lock gate (fun () -> awaitingAnswer)) ->
+                    fail requestId
+                        "stale_decision"
+                        "That prompt has been answered; re-observe at the next boundary"
                 | Some slot -> ok requestId slot.Observation
                 | None -> fail requestId "reset_required" "No decision is waiting"
         | "step" ->
