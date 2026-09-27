@@ -1910,24 +1910,44 @@
         "XRL.IEventHandler"
       ],
       "member_name_filters": [
-        "DisplayName",
-        "IsPlayer",
         "CurrentCell",
-        "GetRenderString",
+        "DisplayName",
+        "Stat",
         "Visible",
-        "IsVisibleTo",
-        "Blueprint",
-        "GetBlueprint",
-        "FireEvent",
+        "Render",
+        "Inventory",
+        "Body",
+        "ActivatedAbilit",
         "GetPart",
         "HasPart",
         "AddPart",
-        "GetRenderString"
+        "IsPlayer",
+        "GetRenderString",
+        "IsVisibleTo",
+        "Blueprint",
+        "GetBlueprint",
+        "FireEvent"
       ],
       "declared_members_only": true,
-      "members_truncated": false,
-      "matched_members": 87,
+      "members_truncated": true,
+      "matched_members": 250,
       "members": [
+        {
+          "kind": "method",
+          "name": "get_pRender",
+          "attributes": "Public, HideBySig, SpecialName",
+          "return_type": "XRL.World.Parts.Render",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "get__pRender",
+          "attributes": "Public, HideBySig, SpecialName",
+          "return_type": "XRL.World.Parts.Render",
+          "parameters": [],
+          "generic_parameters": 0
+        },
         {
           "kind": "method",
           "name": "findByBlueprint",
@@ -1935,6 +1955,119 @@
           "return_type": "XRL.World.GameObject",
           "parameters": [
             "String"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "ApplyStatShift",
+          "attributes": "Public, HideBySig",
+          "return_type": "Boolean",
+          "parameters": [
+            "String",
+            "Int32"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "UnapplyStatShift",
+          "attributes": "Public, HideBySig",
+          "return_type": "Boolean",
+          "parameters": [
+            "String",
+            "Int32"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetActivatedAbilityCooldownTurns",
+          "attributes": "Public, HideBySig",
+          "return_type": "Int32",
+          "parameters": [
+            "System.Guid"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetHighestActivatedAbilityCooldownTurns",
+          "attributes": "Public, HideBySig",
+          "return_type": "Int32",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "RenderTile",
+          "attributes": "Public, HideBySig",
+          "return_type": "Boolean",
+          "parameters": [
+            "ConsoleLib.Console.ConsoleChar"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "RenderForUI",
+          "attributes": "Public, HideBySig",
+          "return_type": "XRL.World.RenderEvent",
+          "parameters": [
+            "String",
+            "Boolean"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "RenderSound",
+          "attributes": "Public, HideBySig",
+          "return_type": "Boolean",
+          "parameters": [
+            "ConsoleLib.Console.ConsoleChar",
+            "ConsoleLib.Console.ConsoleChar[,]"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "ComponentRender",
+          "attributes": "Public, HideBySig",
+          "return_type": "Boolean",
+          "parameters": [
+            "XRL.World.RenderEvent"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "OverlayRender",
+          "attributes": "Public, HideBySig",
+          "return_type": "Boolean",
+          "parameters": [
+            "XRL.World.RenderEvent"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "FinalRender",
+          "attributes": "Public, HideBySig",
+          "return_type": "Boolean",
+          "parameters": [
+            "XRL.World.RenderEvent"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "FinalRender",
+          "attributes": "Public, HideBySig",
+          "return_type": "Boolean",
+          "parameters": [
+            "XRL.World.RenderEvent",
+            "Boolean"
           ],
           "generic_parameters": 0
         },
@@ -2006,6 +2139,14 @@
         },
         {
           "kind": "method",
+          "name": "get_InInventory",
+          "attributes": "Public, HideBySig, SpecialName",
+          "return_type": "XRL.World.GameObject",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
           "name": "get_CurrentCell",
           "attributes": "Public, HideBySig, SpecialName",
           "return_type": "XRL.World.Cell",
@@ -2039,6 +2180,576 @@
           "return_type": "Void",
           "parameters": [
             "XRL.World.GameObjectBlueprint"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "FinalizeStats",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetStatValue",
+          "attributes": "Public, HideBySig",
+          "return_type": "Int32",
+          "parameters": [
+            "String",
+            "Int32"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "HasStat",
+          "attributes": "Public, HideBySig",
+          "return_type": "Boolean",
+          "parameters": [
+            "String"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetStat",
+          "attributes": "Public, HideBySig",
+          "return_type": "XRL.World.Statistic",
+          "parameters": [
+            "String"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "Stat",
+          "attributes": "Public, HideBySig",
+          "return_type": "Int32",
+          "parameters": [
+            "String",
+            "Int32"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "BaseStat",
+          "attributes": "Public, HideBySig",
+          "return_type": "Int32",
+          "parameters": [
+            "String",
+            "Int32"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "StatMod",
+          "attributes": "Public, HideBySig",
+          "return_type": "Int32",
+          "parameters": [
+            "String",
+            "Int32"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "AddStatBonus",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "String",
+            "Int32"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "AddStatPenalty",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "String",
+            "Int32"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "AddBaseStat",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "String",
+            "Int32"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "BoostStat",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "String",
+            "Int32"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "BoostStat",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "String",
+            "Double"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "MultiplyStat",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "String",
+            "Int32"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetWholeInventory",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetWholeInventoryReadonly",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventory",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventory",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirect",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventory",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirect",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryAndEquipmentAndDefaultEquipment",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryAndEquipment",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryAndEquipment",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryAndEquipment",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryAndEquipment",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryAndEquipmentReadonly",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryAndEquipmentReadonly",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectAndEquipment",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectAndEquipmentAndAdjacentCells",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectAndEquipment",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectAndEquipment",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectAndEquipment",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectAndEquipmentReadonly",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectAndEquipmentReadonly",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryEquipmentAndCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryEquipmentAndCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryEquipmentAndCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryEquipmentAndCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryEquipmentAndCyberneticsReadonly",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryEquipmentAndCyberneticsReadonly",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectEquipmentAndCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectEquipmentAndCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectEquipmentAndCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectEquipmentAndCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectEquipmentAndCyberneticsReadonly",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetInventoryDirectEquipmentAndCyberneticsReadonly",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "ForeachInventoryAndEquipment",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Action\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "SafeForeachInventoryAndEquipment",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Action\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "ForeachInventoryEquipmentAndCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Action\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "SafeForeachInventoryEquipmentAndCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Action\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "ForeachInventoryEquipmentDefaultBehaviorAndCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Action\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "SafeForeachInventoryEquipmentDefaultBehaviorAndCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Action\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "FindObjectInInventory",
+          "attributes": "Public, HideBySig",
+          "return_type": "XRL.World.GameObject",
+          "parameters": [
+            "String"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "FindObjectInInventory",
+          "attributes": "Public, HideBySig",
+          "return_type": "XRL.World.GameObject",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "FindObjectsInInventory",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "String"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "FindObjectsInInventory",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "HasObjectInInventory",
+          "attributes": "Public, HideBySig",
+          "return_type": "Boolean",
+          "parameters": [
+            "System.Func\u00602\u003CXRL.World.GameObject,Boolean\u003E",
+            "Int32"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "HasObjectInInventory",
+          "attributes": "Public, HideBySig",
+          "return_type": "Boolean",
+          "parameters": [
+            "String",
+            "Int32"
           ],
           "generic_parameters": 0
         },
@@ -2142,179 +2853,6 @@
         },
         {
           "kind": "method",
-          "name": "get_ShortDisplayName",
-          "attributes": "Public, HideBySig, SpecialName",
-          "return_type": "String",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "get_ShortDisplayNameSingle",
-          "attributes": "Public, HideBySig, SpecialName",
-          "return_type": "String",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "get_ShortDisplayNameStripped",
-          "attributes": "Public, HideBySig, SpecialName",
-          "return_type": "String",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "get_ShortDisplayNameSingleStripped",
-          "attributes": "Public, HideBySig, SpecialName",
-          "return_type": "String",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "get_ShortDisplayNameWithoutTitles",
-          "attributes": "Public, HideBySig, SpecialName",
-          "return_type": "String",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "get_ShortDisplayNameWithoutTitlesStripped",
-          "attributes": "Public, HideBySig, SpecialName",
-          "return_type": "String",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "get_BaseDisplayName",
-          "attributes": "Public, HideBySig, SpecialName",
-          "return_type": "String",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "get_BaseKnownDisplayName",
-          "attributes": "Public, HideBySig, SpecialName",
-          "return_type": "String",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "get_BaseDisplayNameStripped",
-          "attributes": "Public, HideBySig, SpecialName",
-          "return_type": "String",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "get_DisplayNameColor",
-          "attributes": "Public, HideBySig, SpecialName",
-          "return_type": "String",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "GetDisplayName",
-          "attributes": "Public, HideBySig",
-          "return_type": "String",
-          "parameters": [
-            "Boolean\u0026",
-            "Int32",
-            "String",
-            "String",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "String",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "System.Nullable\u00601\u003CBoolean\u003E",
-            "Boolean",
-            "XRL.World.GameObject",
-            "Boolean",
-            "Boolean"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "GetDisplayName",
-          "attributes": "Public, HideBySig",
-          "return_type": "String",
-          "parameters": [
-            "Int32",
-            "String",
-            "String",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "String",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "System.Nullable\u00601\u003CBoolean\u003E",
-            "Boolean",
-            "XRL.World.GameObject",
-            "Boolean",
-            "Boolean"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "GetReferenceDisplayName",
-          "attributes": "Public, HideBySig",
-          "return_type": "String",
-          "parameters": [
-            "Int32",
-            "String",
-            "String",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "Boolean",
-            "String",
-            "Boolean"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
           "name": "FireEvent",
           "attributes": "Public, HideBySig",
           "return_type": "Boolean",
@@ -2363,26 +2901,6 @@
           "return_type": "Boolean",
           "parameters": [
             "XRL.World.Event",
-            "XRL.World.Event"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "FireEventDirect",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [
-            "XRL.World.Event"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "FireEventOnBodyparts",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [
             "XRL.World.Event"
           ],
           "generic_parameters": 0
@@ -2424,16 +2942,6 @@
           "return_type": "Boolean",
           "parameters": [],
           "generic_parameters": 1
-        },
-        {
-          "kind": "method",
-          "name": "HasItemWithBlueprint",
-          "attributes": "Public, HideBySig",
-          "return_type": "XRL.World.GameObject",
-          "parameters": [
-            "String"
-          ],
-          "generic_parameters": 0
         },
         {
           "kind": "method",
@@ -2460,50 +2968,6 @@
           "return_type": "XRL.World.IPart",
           "parameters": [
             "String"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "GetPartExcept",
-          "attributes": "Public, HideBySig",
-          "return_type": "XRL.World.IPart",
-          "parameters": [
-            "String",
-            "XRL.World.IPart"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "TryGetPart",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [
-            "!!0\u0026"
-          ],
-          "generic_parameters": 1
-        },
-        {
-          "kind": "method",
-          "name": "TryGetPartDescendedFrom",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [
-            "!!0\u0026"
-          ],
-          "generic_parameters": 1
-        },
-        {
-          "kind": "method",
-          "name": "AddPartInternals",
-          "attributes": "Family, HideBySig",
-          "return_type": "Void",
-          "parameters": [
-            "XRL.World.IPart",
-            "Boolean",
-            "Boolean",
-            "Boolean"
           ],
           "generic_parameters": 0
         },
@@ -2556,220 +3020,10 @@
         },
         {
           "kind": "method",
-          "name": "HasPartDescendedFrom",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [],
-          "generic_parameters": 1
-        },
-        {
-          "kind": "method",
-          "name": "GetPartDescendedFrom",
-          "attributes": "Public, HideBySig",
-          "return_type": "!!0",
-          "parameters": [],
-          "generic_parameters": 1
-        },
-        {
-          "kind": "method",
-          "name": "GetPartDescendedFrom",
-          "attributes": "Public, HideBySig",
-          "return_type": "!!0",
-          "parameters": [
-            "System.Predicate\u00601\u003C!!0\u003E"
-          ],
-          "generic_parameters": 1
-        },
-        {
-          "kind": "method",
-          "name": "GetPartsDescendedFrom",
-          "attributes": "Public, HideBySig",
-          "return_type": "System.Collections.Generic.List\u00601\u003C!!0\u003E",
-          "parameters": [],
-          "generic_parameters": 1
-        },
-        {
-          "kind": "method",
-          "name": "GetPartsDescendedFrom",
-          "attributes": "Public, HideBySig",
-          "return_type": "System.Collections.Generic.List\u00601\u003C!!0\u003E",
-          "parameters": [
-            "System.Predicate\u00601\u003C!!0\u003E"
-          ],
-          "generic_parameters": 1
-        },
-        {
-          "kind": "method",
-          "name": "IsVisible",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "GetBlueprintEpistemicStatus",
-          "attributes": "Public, HideBySig",
-          "return_type": "Int32",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "IsBlueprintUnderstood",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "IsBlueprintPartiallyUnderstood",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
           "name": "IsPlayer",
           "attributes": "Public, HideBySig",
           "return_type": "Boolean",
           "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "IsVisibleHostile",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [
-            "XRL.World.GameObject"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "IsVisibleHostileInternal",
-          "attributes": "Private, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [
-            "XRL.World.GameObject",
-            "Int32",
-            "Int32"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "IsVisibleHostileInternal",
-          "attributes": "Private, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [
-            "XRL.World.GameObject"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "GetNearestVisibleObject",
-          "attributes": "Public, HideBySig",
-          "return_type": "XRL.World.GameObject",
-          "parameters": [
-            "Boolean",
-            "String",
-            "Int32",
-            "Boolean",
-            "Boolean",
-            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "GetVisibleCombatObjects",
-          "attributes": "Public, HideBySig",
-          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "IsPlayerLed",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "IsPlayerControlled",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "IsPlayerLedAndPerceptible",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "IsPlayerControlledAndPerceptible",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "SetActivatedAbilityDisplayName",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [
-            "System.Guid",
-            "String"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "BlueprintSeen",
-          "attributes": "Public, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "GetTinkeringBlueprint",
-          "attributes": "Public, HideBySig",
-          "return_type": "String",
-          "parameters": [],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "ReplaceDisplayName",
-          "attributes": "Public, HideBySig",
-          "return_type": "Void",
-          "parameters": [
-            "XRL.World.GetDisplayNameEvent"
-          ],
-          "generic_parameters": 0
-        },
-        {
-          "kind": "method",
-          "name": "ObjectIsPlayerLed",
-          "attributes": "Private, Static, HideBySig",
-          "return_type": "Boolean",
-          "parameters": [
-            "XRL.World.GameObject"
-          ],
           "generic_parameters": 0
         },
         {
@@ -2780,15 +3034,21 @@
         },
         {
           "kind": "field",
-          "name": "_BlueprintCache",
-          "attributes": "Private",
-          "field_type": "XRL.World.GameObjectBlueprint"
+          "name": "Render",
+          "attributes": "Public",
+          "field_type": "XRL.World.Parts.Render"
         },
         {
           "kind": "field",
-          "name": "_CachedDisplayNameForSort",
+          "name": "Body",
           "attributes": "Public",
-          "field_type": "String"
+          "field_type": "XRL.World.Parts.Body"
+        },
+        {
+          "kind": "field",
+          "name": "Inventory",
+          "attributes": "Public",
+          "field_type": "XRL.World.Parts.Inventory"
         }
       ]
     },
@@ -3854,11 +4114,11 @@
       "base_type": "System.Object",
       "interfaces": [],
       "member_name_filters": [
-        "Width",
-        "Height",
-        "GetCell",
         "Visible",
         "Explored",
+        "GetCell",
+        "Width",
+        "Height",
         "ID",
         "Name"
       ],
@@ -4539,14 +4799,136 @@
       "base_type": "XRL.World.IPart",
       "interfaces": [],
       "member_name_filters": [
-        "GetParts",
         "GetPart",
-        "GetBody"
+        "GetEquipped",
+        "GetBody",
+        "GetParts"
       ],
       "declared_members_only": true,
       "members_truncated": false,
-      "matched_members": 42,
+      "matched_members": 56,
       "members": [
+        {
+          "kind": "method",
+          "name": "GetEquippedObjects",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedObjects",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedObjects",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedObjects",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedObjectsReadonly",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedObjectsReadonly",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedObjectsExceptNatural",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Collections.Generic.IList\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedObjectsExceptNatural",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedObjectsExceptNatural",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedObjectsAndInstalledCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "Void",
+          "parameters": [
+            "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedObjectsAndInstalledCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedObjectsAndInstalledCyberneticsReadonly",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedObjectsAndInstalledCybernetics",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.GameObject\u003E",
+          "parameters": [
+            "System.Predicate\u00601\u003CXRL.World.GameObject\u003E"
+          ],
+          "generic_parameters": 0
+        },
         {
           "kind": "method",
           "name": "GetBody",
@@ -4601,6 +4983,14 @@
             "System.Collections.Generic.List\u00601\u003CXRL.World.Anatomy.BodyPart\u003E",
             "Boolean"
           ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetEquippedParts",
+          "attributes": "Public, HideBySig",
+          "return_type": "System.Collections.Generic.List\u00601\u003CXRL.World.Anatomy.BodyPart\u003E",
+          "parameters": [],
           "generic_parameters": 0
         },
         {
@@ -4995,10 +5385,10 @@
         "Type",
         "Name",
         "Equipped",
-        "Primary",
-        "GetOrdinalName",
         "Child",
-        "Part"
+        "Part",
+        "Primary",
+        "GetOrdinalName"
       ],
       "declared_members_only": true,
       "members_truncated": true,
@@ -6149,6 +6539,26 @@
             "String"
           ],
           "generic_parameters": 0
+        },
+        {
+          "kind": "method",
+          "name": "GetOrdinalName",
+          "attributes": "Public, HideBySig",
+          "return_type": "String",
+          "parameters": [],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "field",
+          "name": "Type",
+          "attributes": "Public",
+          "field_type": "String"
+        },
+        {
+          "kind": "field",
+          "name": "Name",
+          "attributes": "Public",
+          "field_type": "String"
         }
       ]
     },
@@ -7779,6 +8189,9 @@
       ],
       "member_name_filters": [
         "Show",
+        "Text",
+        "Options",
+        "Menu",
         "ShowFail",
         "ShowBlock",
         "ShowBlockPrompt",
@@ -7793,7 +8206,7 @@
       ],
       "declared_members_only": true,
       "members_truncated": false,
-      "matched_members": 29,
+      "matched_members": 33,
       "members": [
         {
           "kind": "method",
@@ -8037,6 +8450,16 @@
         },
         {
           "kind": "method",
+          "name": "contextRender",
+          "attributes": "Private, Static, HideBySig",
+          "return_type": "XRL.World.RenderEvent",
+          "parameters": [
+            "XRL.World.GameObject"
+          ],
+          "generic_parameters": 0
+        },
+        {
+          "kind": "method",
           "name": "ShowConversation",
           "attributes": "Public, Static, HideBySig",
           "return_type": "Int32",
@@ -8267,9 +8690,27 @@
         },
         {
           "kind": "field",
+          "name": "_TextConsole",
+          "attributes": "Public, Static",
+          "field_type": "ConsoleLib.Console.TextConsole"
+        },
+        {
+          "kind": "field",
           "name": "Suppress",
           "attributes": "Public, Static",
           "field_type": "Boolean"
+        },
+        {
+          "kind": "field",
+          "name": "ColorPickerOptionStrings",
+          "attributes": "Private, Static, NotSerialized",
+          "field_type": "System.Collections.Generic.List\u00601\u003CString\u003E"
+        },
+        {
+          "kind": "field",
+          "name": "ColorPickerOptions",
+          "attributes": "Private, Static, NotSerialized",
+          "field_type": "System.Collections.Generic.List\u00601\u003CString\u003E"
         }
       ]
     },

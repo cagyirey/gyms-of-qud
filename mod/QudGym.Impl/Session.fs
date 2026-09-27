@@ -2047,14 +2047,6 @@ module Session =
                             { Plan.Player = player
                               Plan.Nearby = []
                               Plan.Entities = [] }
-                    // Trace the decision, including what the available check
-                    // said about each action, before advancing.
-                    let offered =
-                        match p with
-                        | Plan.All (Plan.Act(a, _) :: _) -> a
-                        | Plan.All (Plan.Branch(_, Plan.Act(a, _), _) :: _) -> a
-                        | _ -> "(non-Act head)"
-                    let av = available offered
                     match Plan.advanceWith say available view p with
                     | Plan.Stepped(action, rest) ->
                         lock gate (fun () ->

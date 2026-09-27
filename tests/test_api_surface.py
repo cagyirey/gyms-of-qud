@@ -40,7 +40,9 @@ HOOKS = {
         "ShowFinishPopup", "ShowFinishStepPopup",
     ],
     "Qud.UI.WorldGenerationScreen": ["ShowWorldGenerationScreen"],
-    "XRL.World.GameObject": ["FireEvent", "GetPart"],
+    # GetPart is resolved as a generic method and is a real dependency. FireEvent
+    # was listed here speculatively and nothing in the mod calls it.
+    "XRL.World.GameObject": ["GetPart"],
     "XRL.World.Parts.Inventory": ["GetEquipmentListForSlot"],
     "XRL.XRLGame": ["Quests", "FinishedQuests"],
     "ConsoleLib.Console.Markup": ["Strip"],
