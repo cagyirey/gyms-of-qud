@@ -1061,9 +1061,19 @@ module Session =
             if isNull keyboard then false
             else
                 let keyCode = (gameAssembly ()).GetType("UnityEngine.KeyCode", false)
-                let pushKey = keyboard.GetMethod("PushKey", [| keyCode |])
-                if isNull pushKey || isNull keyCode then false
+                // Both types must be resolved before PushKey is looked up by
+                // signature. A null entry in the type array makes GetMethod throw
+                // ArgumentNullException ("Value cannot be null. Parameter name:
+                // types") rather than return null, so the isNull keyCode test used
+                // to sit on the line *after* the call that needed it -- and every
+                // answer delivered outside an open prompt died there, with the
+                // conversation silently left where it was.
+                if isNull keyCode then false
                 else
+                    let pushKey = keyboard.GetMethod("PushKey", [| keyCode |])
+                    if isNull pushKey then
+                        false
+                    else
                     // D1..D9 for the first nine, then A.. as the game does.
                     let name =
                         if index < 9 then "D" + string (index + 1)
@@ -1854,6 +1864,16 @@ module Session =
                             say ("plan answers the one the game will accept: answer:" + string only)
                             lock gate (fun () -> currentPlan <- Some rest)
                             Some(Plan.gameIndex only)
+                        // The plan still owes an answer and cannot resolve it, so
+                        // it has NOT answered. The prompt is left for a client
+                        // rather than let lapse.
+                        //
+                        // Falling through to the transport here looked like
+                        // progress and was the opposite: the wait expired, the
+                        // conversation timed out, AttemptConversation started it
+                        // again from the top, and the plan's remaining answers were
+                        // then delivered to a conversation that had gone backwards.
+                        // A refused answer must not cost the prompt.
                         | [||] ->
                             say "no option the game will accept; the plan is not answering"
                             None

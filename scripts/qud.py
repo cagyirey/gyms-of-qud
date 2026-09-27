@@ -84,14 +84,22 @@ def describe_prompt(prompt: dict) -> None:
 
 
 async def play(program: str, *, seconds: float, watch: bool) -> int:
+    mark = 0
     if not CONTROL.is_file():
         print("no control file: the game has not finished booting", file=sys.stderr)
         return 1
     url, token = (CONTROL.read_text().split("\n") + ["", ""])[:2]
     if watch:
-        # The log is append-mode, so without this a report quotes the previous
-        # run's conversation as this one's.
-        LOG.write_text("")
+        # Read this run's lines from where the file is now, not by truncating it.
+        #
+        # The mod holds the log open for the life of the process. Truncating it
+        # leaves the writer positioned past the new end of file, so every later
+        # write lands at an offset beyond EOF and the log reads as 0 bytes
+        # forever. That is not a reporting gap, it is a destroyed file: a run
+        # looks like a stall because there is nothing left to read.
+        #
+        # So mark where the file ends now and read only what follows.
+        mark = LOG.stat().st_size
 
     async with websockets.connect(
         url.strip(),
@@ -152,7 +160,10 @@ async def play(program: str, *, seconds: float, watch: bool) -> int:
 
     if watch:
         print("\n=== the mod's account, from the log ===")
-        for line in LOG.read_text(errors="replace").split("\n"):
+        with LOG.open("rb") as handle:
+            handle.seek(mark)
+            fresh = handle.read().decode("utf-8", "replace")
+        for line in fresh.split("\n"):
             if any(k in line for k in (
                 "conversation popup", "option:", "plan answers", "conversation select",
                 "menu '", "not on offer", "reembark", "MODERROR",

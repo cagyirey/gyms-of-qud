@@ -240,6 +240,40 @@ module Embark =
         setValue coreType core "Game" game
         invoke "CreateNewGame" [||] game |> ignore
         invoke "Reset" [||] core |> ignore
+        let managerType = ty "GameManager"
+        // Hand the turn to this thread instead of to Unity's UI queue.
+        //
+        // XRLCore.RunGame does this:
+        //
+        //     if (GameManager.runWholeTurnOnUIThread > 0 && Thread.CurrentThread == CoreThread)
+        //     {
+        //         GameManager.Instance.uiQueue.queueTask(() => { ... RunSegment(); ... });
+        //         while (waitForSegmentOnGameThread) { ... }   // the core thread waits
+        //     }
+        //
+        // So with the flag set, a turn only happens once Unity's UI context
+        // pumps. That is not guaranteed: a window that is not being rendered does
+        // not pump it, and the symptom is exact -- an action is queued through
+        // Keyboard.PushCommand, the core thread waits for the segment that never
+        // comes, and the turn counter does not move. Observed as a plan that
+        // stepped move_to:42,19 and then sat at turn 1 indefinitely.
+        //
+        // Zero keeps the turn on the thread already running the game, which is
+        // where the game's own logic expects to be. It is a flag the game reads,
+        // not a patched method, so nothing changes beyond which thread runs the
+        // segment.
+        //
+        // Read back and logged, because a reflection call that finds nothing must
+        // not be assumed to have worked.
+        let wholeTurnOnUi =
+            try
+                setValue managerType null "runWholeTurnOnUIThread" (box 0)
+                match staticValue "runWholeTurnOnUIThread" managerType with
+                | :? int as n -> string n
+                | other -> if isNull other then "absent" else other.ToString()
+            with ex -> "failed: " + (ex.GetBaseException().Message)
+        Probe.record logPath ("turn thread whole-turn-on-ui-thread=" + wholeTurnOnUi) |> ignore
+        let manager = staticValue "Instance" managerType
         let manager = staticValue "Instance" (ty "GameManager")
         match instanceValue "gameQueue" manager with
         | null -> ()
