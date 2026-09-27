@@ -163,12 +163,19 @@ async def play(program: str, *, seconds: float, watch: bool) -> int:
         with LOG.open("rb") as handle:
             handle.seek(mark)
             fresh = handle.read().decode("utf-8", "replace")
+        # Summarised, not dumped.
+        #
+        # The log is written for diagnosis and is far too loud to read as a run's
+        # output: every option of every prompt, every boundary, every input push.
+        # What a run needs to say is which option the plan pressed, what the game
+        # refused, and anything that went wrong.
         for line in fresh.split("\n"):
-            if any(k in line for k in (
-                "conversation popup", "option:", "plan answers", "conversation select",
-                "menu '", "not on offer", "reembark", "MODERROR",
-            )):
-                print("  ", line.split(" thread=")[0])
+            body = line.split(" thread=")[0]
+            if "conversation popup" in body or "menu '" in body:
+                # The option count and the refusal count, not the options.
+                print("  ", body)
+            elif any(k in body for k in ("plan answers", "not on offer", "reembark", "MODERROR")):
+                print("  ", body)
     return 0
 
 

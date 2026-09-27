@@ -1611,6 +1611,17 @@ module Session =
     let private commandOf (action: string) (player: obj) =
         if action = "wait" then Some("CmdWait", box null)
         elif action = "look" then Some("CmdLook", box null)
+        // The game's own verbs, named as the game names them.
+        //
+        // CmdGet is take: it picks up what is here or in the container being
+        // stood in, and it is the same call a player's g key makes, so the rules
+        // about what can be picked up are the game's rather than a reimplementation
+        // that would disagree with them.
+        elif action = "take" then Some("CmdGet", box null)
+        // CmdAttackNearest is the game's own nearest-target resolution, so this
+        // inherits its idea of "nearest" and its refusal to swing at nothing
+        // instead of guessing at a target list.
+        elif action = "attack" then Some("CmdAttackNearest", box null)
         // 'quests' is deliberately absent. It used to map to CmdQuests, which pushes
         // the QuestLog screen, and a pushed screen blocks on a keypress exactly as a
         // popup does -- so asking what quest the player was on left a window open and
@@ -1957,8 +1968,20 @@ module Session =
                     awaitingAnswer <- false
                     answerArrived <- TaskCompletionSource<int>())
                 running <- false)
+            // A plan is answered from inside the prompt, on the thread already
+            // waiting for it. So while a prompt is open this thread must not walk
+            // the plan at all.
+            //
+            // It was walking it, and the two disagreed about what an answer is.
+            // supply sees an Answer step as an action the command phase does not
+            // offer, reports it unsupported, and splices a continuation that put
+            // the step back. conversationTurn then found the same Answer again on
+            // the next prompt and pressed it a second time -- a program of
+            // "3, 1, 2, look, take" answered 3, 1, 2 and then 3 again, which is
+            // not a position the program contains.
+            let promptOpen = lock gate (fun () -> awaitingAnswer)
             let fromPlan =
-                if not running then None
+                if not running || promptOpen then None
                 else
                 match currentPlan with
                 | None -> None
