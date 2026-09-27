@@ -74,9 +74,18 @@ module Plan =
         /// A step ran; the remainder is what to advance next.
         | Stepped of action: string * rest: Plan
         | Finished
+        /// Not now; the same step is worth trying again next turn.
         | Skipped of rest: Plan
         /// The plan named an action the live action space does not offer.
         | Unsupported of action: string * rest: Plan
+        /// The plan named something the world does not offer at all -- a target that
+        /// is not in the published list, or an answer the game is not asking for.
+        ///
+        /// Distinct from Skipped because Skipped means "not yet" and this means
+        /// "never", so the reason is more useful than going quiet. A goto whose
+        /// target is not published used to end the program silently, which was
+        /// indistinguishable from a plan that had finished on purpose.
+        | Unavailable of reason: string * rest: Plan
         | Exhausted of rest: Plan
 
     // -- combinators -------------------------------------------------------
@@ -248,8 +257,26 @@ module Plan =
             // could not use doors, and needed a step per cell. CmdMoveTo does
             // this properly by setting AutoAct to "M<x>,<y>" and letting the
             // game autopilot there, so that is what a plan asks for.
+            // A target that is not in the published list is Exhausted, not Skipped.
+            //
+            // Skipped carried All [], and All [] is Finished -- so a goto that could
+            // not find its target ended the entire program, silently, reporting
+            // success. A plan naming a name the world does not publish therefore
+            // stopped at that step and every later step was dropped, which is
+            // indistinguishable from a plan that had finished on purpose.
+            //
+            // The name is also not a guess: the walk publishes an object's
+            // DisplayName, so "mehmet" is not a name the world offers at all, and
+            // saying so is the useful answer. "watervine farmer" is.
             match findEntity view name with
-            | None -> Skipped(All [])
+            | None ->
+                let known =
+                    view.Entities
+                    |> List.map (fun (n, _, _) -> n)
+                    |> List.distinct
+                    |> String.concat ", "
+                trace ("goto " + name + " is not published; the world offers: " + known)
+                Unavailable("no target named " + name + "; published: " + known, All [])
             | Some (_, ex, ey) ->
                 let move = "move_to:" + string ex + "," + string ey
                 trace ("goto " + name + " -> " + move)
@@ -266,13 +293,14 @@ module Plan =
             //
             // The observation publishes an "answer:N" action for exactly the
             // options the game is offering, so the id is offered only when the
-            // game permits it. A plan that names an answer the game did not offer
-            // is therefore reported Unsupported rather than pressed into the void,
-            // which is the same rule every other step follows.
+            // game permits it. An answer the game is not asking for is Unavailable
+            // rather than skipped: the game asked something else, and going quiet
+            // reads as "waiting" when the truth is that this plan has drifted out of
+            // step with the conversation.
             let action = "answer:" + string index
             trace ("answer " + string index)
             if available action then Stepped(action, All [])
-            else Skipped(All [])
+            else Unavailable("the game is not offering " + action, All [])
         | Branch(test, whenTrue, whenFalse) ->
             if test view then advanceWith trace available view whenTrue
             else
@@ -291,6 +319,10 @@ module Plan =
                 | Stepped(a, _) -> Stepped(a, rest)
                 | Skipped _ -> Skipped(rest)
                 | Unsupported(a, _) -> Unsupported(a, rest)
+                // A body that cannot be done is reported, not retried: repeating a
+                // step against a world that does not offer it is how a loop turns
+                // into a hang.
+                | Unavailable(r, _) -> Unavailable(r, rest)
                 | Finished -> Skipped(rest)
                 | Exhausted _ -> Exhausted(rest)
         | All [] -> Finished
@@ -305,6 +337,7 @@ module Plan =
             | Stepped(a, cont) -> Stepped(a, resume cont)
             | Skipped cont -> Skipped(resume cont)
             | Unsupported(a, cont) -> Unsupported(a, resume cont)
+            | Unavailable(r, cont) -> Unavailable(r, resume cont)
             | Finished -> advanceWith trace available view (All tailPlan)
             | Exhausted _ -> advanceWith trace available view (All tailPlan)
 

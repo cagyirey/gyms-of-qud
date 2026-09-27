@@ -1859,6 +1859,16 @@ module Session =
                             planTrace <- "unsupported " + action
                             planNote <- "unsupported action: " + action)
                         None
+                    // The plan asked for something the world does not offer, and the
+                    // reason says which names it does. Recorded rather than dropped,
+                    // because a goto whose target is not published used to end the
+                    // whole program quietly and look like a plan that had finished.
+                    | Plan.Unavailable(reason, _) ->
+                        lock gate (fun () ->
+                            currentPlan <- None
+                            planTrace <- "unavailable " + reason
+                            planNote <- reason)
+                        None
                     | Plan.Exhausted _ ->
                         lock gate (fun () ->
                             currentPlan <- None
