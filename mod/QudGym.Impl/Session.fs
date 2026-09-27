@@ -913,7 +913,20 @@ module Session =
         let mutable announced = -1
         let mutable result : (string * obj) option = None
         let mutable running = true
+        // A bounded sleep does not bound a loop. Without a deadline this spins
+        // on the game turn thread until an action arrives, and a client that
+        // disconnected -- or a game that will never offer another boundary --
+        // left it spinning forever. On expiry the turn is handed back to the
+        // game, which waits for real input, and the fact is recorded rather than
+        // left as a silent stall.
+        let deadline = DateTime.UtcNow.AddSeconds 900.0
         while running && result.IsNone do
+            if DateTime.UtcNow > deadline then
+                running <- false
+                if logPath <> "" then
+                    Probe.record logPath
+                        (sprintf "supply deadline reached at turn %d; handing the turn back" turn)
+                    |> ignore
             let staged =
                 lock gate (fun () ->
                     match waiting with
@@ -1066,57 +1079,54 @@ module Session =
             box (ValueTuple<string, obj>(name, arg))
         | None -> box null
 
-    /// Enqueue a movement script and wait for the turn thread to drain it.
-    ///
-    /// Returns when the script is exhausted, when an action is rejected, or
-    /// when the turn thread stops consuming -- which is what a dialogue or a
-    /// combat interrupt looks like from here. That stall is reported rather
-    /// than hidden, because "the script did not finish" is exactly the signal a
-    /// caller needs to decide what to do next. A single blocked step is not
-    /// retried and the queue is left intact for a follow-up call.
-    let runScript (actions: string[]) (stallMilliseconds: int) =
-        let startPublished =
-            lock gate (fun () ->
-                // No pre-validation here: an action can only be resolved against
-                // the live world, which the turn thread has and this thread does
-                // not. supply rejects anything unresolvable and injects nothing.
-                for a in actions do pending.Enqueue a
-                consumed, pending.Count, published, rejected)
-        let start = DateTime.UtcNow
-        let mutable last = startPublished
-        let mutable settled = false
-        let mutable sawProgress = false
-        while not settled do
-            Thread.Sleep(25)
-            let now = lock gate (fun () -> consumed, pending.Count, published, rejected)
-            if now <> last then
-                last <- now
-                sawProgress <- true
-            else
-                // Settled means: nothing new was published for the whole window.
-                // Requiring an idle window after the last publication is what
-                // makes this a completion signal rather than a dispatch signal;
-                // without it the caller gets a readout from before the commands
-                // ran. An untouched game also settles, which is correct: there
-                // was nothing to wait for.
-                let elapsed = int (DateTime.UtcNow - start).TotalMilliseconds
-                let (cNow, qNow, _, _) = now
-                let (cStart, qStart, _, _) = startPublished
-                let drained = cNow >= cStart + qStart
-                if elapsed >= stallMilliseconds && (sawProgress || drained) then settled <- true
-        let cStart, _, _, rStart = startPublished
-        let doneCount, left, badCount =
-            lock gate (fun () -> consumed - cStart, pending.Count, rejected - rStart)
-        (doneCount, left, badCount, settled)
-
-    /// Bounded by construction: it returns on completion or on a stall.
-    let run (actions: string[]) (stallMilliseconds: int) = runScript actions stallMilliseconds
-
     let private currentWaiting () =
         lock gate (fun () ->
             match waiting with
             | Some slot when slot.Action.IsNone && not slot.Consumed -> Some slot
             | _ -> None)
+
+    /// Run a script of actions through the primitive step path.
+    ///
+    /// There is no separate batch scheduler. This used to exist as its own
+    /// scheduler with its own wait, and that was the review's central point:
+    /// two owners of the action lifecycle, one of which reported completion
+    /// from its own queue rather than from the game. A script is now just
+    /// repeated steps, so there is exactly one thing that can be true about
+    /// whether an action happened.
+    let runScript (actions: string[]) (stallMilliseconds: int) =
+        let mutable doneCount = 0
+        let mutable rejectedCount = 0
+        let mutable left = actions.Length
+        let mutable halted = false
+        for action in actions do
+            if left = 0 then
+                halted <- true
+            else
+                // Claim the current boundary under the same lock every other
+                // mutation uses. The claim is what owns the action; there is no
+                // separate queue for a batch to drain.
+                let claimed =
+                    lock gate (fun () ->
+                        match waiting with
+                        | Some slot when not slot.Consumed && slot.Action.IsNone ->
+                            slot.Action <- Some action
+                            Some slot
+                        | _ -> None)
+                match claimed with
+                | None ->
+                    left <- 0
+                    halted <- true
+                | Some slot ->
+                    // Bounded. No progress expires the script rather than
+                    // parking on it, which is what the old scheduler did when
+                    // its queue was non-empty and nothing was being consumed.
+                    if slot.Onward.Task.Wait(stallMilliseconds) then
+                        doneCount <- doneCount + 1
+                        left <- left - 1
+                    else
+                        left <- 0
+                        halted <- true
+        (doneCount, left, rejectedCount, halted)
 
     let private handleOp requestId op body =
         match op with
@@ -1194,47 +1204,20 @@ module Session =
                                 let next = current.Onward.Task.GetAwaiter().GetResult()
                                 ok requestId (transition next.Index next.Turn next.Observation)
         | "run" ->
-            // Batch a movement script and read one state back. The whole script
-            // is the contract: nothing partial is reported as success, and a
-            // stall is surfaced so the caller can tell a dialogue interrupt from
-            // a completed script.
+            // A script is a sequence of steps, not a second scheduler. The
+            // displacement is reported because "consumed" is not "moved": an
+            // action the game refused still gets consumed.
             let items =
                 if isNull body then failwith "run requires a body"
                 else findStringArray "actions" body
-            // Consumption is not effect. An action is consumed when the game
-            // accepts the command and turns it, which happens just as well when
-            // the player walks into a wall as when the player crosses a room.
-            // completed therefore says the script ran, not that anything
-            // changed, and a caller reading only that field cannot tell a
-            // blocked move from a real one. Report the player's displacement so
-            // the two are separable.
-            // Once. This line used to appear twice: the batch was enqueued
-            // twice, the second set of bindings shadowed the first, and a
-            // three-action request dispatched six actions while reporting
-            // three. Counters moved before the command even reached the input
-            // queue, so nothing about the reply could have shown it.
-            let beforeX, beforeY = playerPosition ()
-            let doneCount, left, rejectedCount, halted = run items 400
-            let afterX, afterY = playerPosition ()
-            let known = beforeX <> unknownPos && afterX <> unknownPos
-            let movedX = if known then sprintf "%d" (afterX - beforeX) else "null"
-            let movedY = if known then sprintf "%d" (afterY - beforeY) else "null"
-            // Completed and interrupted are different outcomes and must not be
-            // reported as the same thing: a finished script is a success, a
-            // script the turn thread stopped consuming is an interruption.
-            // An empty script is not a completed script.
-            //
-            // `completed` was `left = 0 && doneCount = items.Length`, which is
-            // trivially true when nothing was ever submitted: 0 = 0. A request
-            // whose `actions` field could not be parsed produced an empty list,
-            // ran nothing, and reported success -- so a live episode moved
-            // nowhere while claiming every step had completed. Require a
-            // non-empty script, and reject a missing or malformed one outright
-            // rather than executing nothing.
+            // Validate before any mutation, not after attempting one.
             if items.Length = 0 then
                 fail requestId "no_actions" "run requires a non-empty actions array"
             else
-                let completed = left = 0 && doneCount = items.Length
+                let beforeX, beforeY = playerPosition ()
+                let doneCount, left, rejectedCount, halted = runScript items 400
+                let afterX, afterY = playerPosition ()
+                let completed = left = 0 && doneCount = items.Length && rejectedCount = 0
                 let slot = lock gate (fun () -> waiting)
                 let obs =
                     match slot with
@@ -1243,9 +1226,11 @@ module Session =
                 ok requestId (sprintf
                     "{\"actions_submitted\":%d,\"actions_consumed\":%d,\"actions_remaining\":%d,\"actions_rejected\":%d,\"completed\":%s,\"interrupted\":%s,\"player_dx\":%s,\"player_dy\":%s,\"observation\":%s}"
                     items.Length doneCount left rejectedCount
-                    (if completed && rejectedCount = 0 then "true" else "false")
-                    (if (not completed) && halted then "true" else "false")
-                    movedX movedY obs)
+                    (if completed then "true" else "false")
+                    (if not completed && halted then "true" else "false")
+                    (if beforeX <> unknownPos && afterX <> unknownPos then string (afterX - beforeX) else "null")
+                    (if beforeY <> unknownPos && afterY <> unknownPos then string (afterY - beforeY) else "null")
+                    obs)
         | "plan" ->
             // Submit a program. It runs on the game turn thread from the next
             // boundary, one action per turn, and reports how it ended rather
@@ -1316,9 +1301,9 @@ module Session =
             diff <- diff ||| (int left.[i] ^^^ int right.[i])
         diff = 0
 
-    // One connection, many decisions. RPC runs off the socket loop so a step
-    // that waits on the game thread can still answer a ping.
-    let private rpcLock = obj ()
+    /// Release the turn thread from a wait. Called only from the transport
+    /// thread; never touches game state.
+    let cancel () = lock gate (fun () -> cancelled <- true)
 
     let private session (webSocket: WebSocket) (_context: HttpContext) =
         socket {
@@ -1332,11 +1317,14 @@ module Session =
                         loop <- false
                     else
                         let text = Encoding.UTF8.GetString data
+                        // No lock around the dispatch. Each mutation is already
+                        // claimed under `gate` -- resetUsed for reset,
+                        // current.Action for a decision -- so the global lock
+                        // added nothing, while a step waiting on the next
+                        // boundary held it for the whole wait and blocked
+                        // observation and reconciliation behind it.
                         Threading.ThreadPool.QueueUserWorkItem(fun _ ->
-                            // Serialize the dispatch, not the write. A send can
-                            // block on a client that stopped reading, and that
-                            // must not stall every other request.
-                            let response = lock rpcLock (fun () -> dispatch text)
+                            let response = dispatch text
                             match response with
                             | None -> ()
                             | Some text' ->
@@ -1350,6 +1338,10 @@ module Session =
                 | (Ping, data, _) ->
                     do! webSocket.send Pong (ArraySegment data) true
                 | (Close, _, _) ->
+                    // A departing client must release the turn thread, or the
+                    // patched IdleWait keeps polling for an action nobody will
+                    // ever send.
+                    cancel ()
                     do! webSocket.send Close (ArraySegment [||]) true
                     loop <- false
                 | _ -> ()
@@ -1368,9 +1360,6 @@ module Session =
             NOT_FOUND "Not found"
         ]
 
-    /// Release the turn thread from a wait. Called only from the transport
-    /// thread; never touches game state.
-    let cancel () = lock gate (fun () -> cancelled <- true)
 
 
     let setPollMilliseconds (value: int) =
