@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using UnityEngine;
 
@@ -32,6 +33,35 @@ using UnityEngine;
 // selectable, so searching the whole string for K would refuse a working choice.
 static class ChoiceAvailability
 {
+    /// The game's own name for an object, with console markup removed.
+    ///
+    /// ConsoleLib's own strip, not a regex: the text arrives as {{G|like this}} and
+    /// anything hand-rolled here would have to learn the markup language in order
+    /// to unlearn it again. `Strip(string)` is the overload that takes and returns a
+    /// plain string, so it is the one that can be reflected over -- the
+    /// ReadOnlySpan overloads cannot.
+    public static string StripMarkup(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+        try
+        {
+            var markup = AppDomain.CurrentDomain.GetAssemblies()
+                .FirstOrDefault(a => a.GetName().Name == "Assembly-CSharp")?
+                .GetType("ConsoleLib.Console.Markup", false);
+            var strip = markup?.GetMethod("Strip", BindingFlags.Public | BindingFlags.Static,
+                                          null, new[] { typeof(string) }, null);
+            if (strip == null)
+                return text;
+            return strip.Invoke(null, new object[] { text }) as string ?? text;
+        }
+        catch (Exception)
+        {
+            // A name the strip cannot read is still better than no name.
+            return text;
+        }
+    }
+
     /// <summary>Per option: true when the game will accept it.</summary>
     public static bool[] From(string[] options)
     {

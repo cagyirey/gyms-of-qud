@@ -345,6 +345,140 @@ static class ShowYesNoCancelGate
     }
 }
 
+// Taking something out of a container is a question with a list of answers, and the
+// game's own picker is where it is asked -- so it is answered the same way a
+// conversation or a menu is.
+//
+// PickItem.ShowPicker is reached from four different places and only two of them
+// are looting:
+//
+//   Container.cs:153   GetItemDialog   a chest
+//   Inventory.cs:1361  GetItemDialog   taking something out of what you carry
+//   Telekinesis, Polygel, FixitSpray, MagazineAmmoLoader, ...  SelectItemDialog
+//                      which part of an ability to use
+//
+// PickItemDialogStyle is therefore the discriminator, and only the overload taking
+// `ref bool RequestInterfaceExit` is gated, because that is the one both looting
+// callers use. A gate that treated every ShowPicker as a container would have
+// changed which ability part Telekinesis picks.
+//
+// Everything not GetItemDialog returns true, so the original runs untouched.
+// The overload is resolved at runtime rather than named in the attribute, because
+// a `ref bool` parameter cannot appear in an attribute's type list -- typeof(bool)
+// .MakeByRefType() is not a constant expression. Naming the parameter types
+// explicitly is also what makes the choice safe: ShowPicker has two overloads and
+// the other one is every ability part selector in the game, which this must not
+// touch.
+[HarmonyPatch]
+static class PickItemGate
+{
+    static System.Reflection.MethodBase TargetMethod()
+    {
+        var pickItem = typeof(XRL.UI.PickItem);
+        foreach (var candidate in pickItem.GetMethods(
+                     System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+        {
+            if (candidate.Name != "ShowPicker")
+                continue;
+            var parameters = candidate.GetParameters();
+            // Items, ref RequestInterfaceExit, CategoryPriority, Style, ...
+            if (parameters.Length != 14)
+                continue;
+            if (parameters[0].ParameterType != typeof(System.Collections.Generic.IList<XRL.World.GameObject>))
+                continue;
+            if (!parameters[1].ParameterType.IsByRef)
+                continue;
+            if (parameters[3].ParameterType != typeof(XRL.UI.PickItem.PickItemDialogStyle))
+                continue;
+            return candidate;
+        }
+        throw new System.MissingMethodException(
+            "XRL.UI.PickItem.ShowPicker(IList<GameObject>, ref bool, ...) was not found");
+    }
+
+    static bool Prefix(ref XRL.World.GameObject __result, ref bool RequestInterfaceExit,
+                       System.Collections.Generic.IList<XRL.World.GameObject> Items,
+                       XRL.UI.PickItem.PickItemDialogStyle Style, string Title)
+    {
+        // Not a container. The original owns this path.
+        if (Style != XRL.UI.PickItem.PickItemDialogStyle.GetItemDialog)
+            return true;
+        try
+        {
+            if (Items == null || Items.Count == 0)
+                return true;
+
+            var objects = new XRL.World.GameObject[Items.Count];
+            var options = new string[Items.Count];
+            for (int i = 0; i < Items.Count; i++)
+            {
+                objects[i] = Items[i];
+                options[i] = Describe(objects[i]);
+            }
+            QudGymBridge.Note("loot '" + (Title ?? "") + "' items=" + objects.Length
+                + " escape=True default=0");
+            for (int i = 0; i < options.Length && i < 12; i++)
+                QudGymBridge.Note("  item: " + options[i]);
+
+            // The picker allows escape in the game's own flow, so cancel is on offer
+            // here too: index -1 is the game's own "took nothing".
+            int chosen = QudGymBridge.MenuTurn(Title ?? "", "Take what?", options, true, 0, 120000);
+            if (chosen < 0 || chosen >= objects.Length)
+            {
+                QudGymBridge.Note("loot nothing chosen");
+                __result = null;
+            }
+            else
+            {
+                QudGymBridge.Note("loot chose " + options[chosen]);
+                __result = objects[chosen];
+            }
+            // The caller watches this to know the picker owned the interface, so it
+            // has to be set or the caller carries on as though nothing was taken.
+            RequestInterfaceExit = true;
+            return false;
+        }
+        catch (System.Exception ex)
+        {
+            // A gate that cannot answer must not take the original path with a
+            // half-set result, so the original runs instead.
+            QudGymBridge.Note("loot gate failed " + ex.GetBaseException().Message);
+            return true;
+        }
+    }
+
+    /// The game's own name for an object, stripped of markup.
+    ///
+    /// GetDisplayName is what the game calls a thing everywhere else, so using it
+    /// keeps the option list the same words the player would read. The strip is
+    /// ConsoleLib's own, because the name arrives as markup and a raw name would
+    //// be the tag rather than the text.
+    /// The game's own name for an object.
+    ///
+    /// GetDisplayName is what the game calls a thing everywhere else, so the option
+    /// list is made of the same words the player would read. It is asked with
+    /// NoColor, which is the game's own way of saying "without the markup", so the
+    /// name needs no second pass to be readable.
+    static string Describe(XRL.World.GameObject item)
+    {
+        if (item == null)
+            return "(nothing)";
+        try
+        {
+            bool adjunctNounActive;
+            var name = item.GetDisplayName(out adjunctNounActive, Cutoff: int.MaxValue,
+                                           NoColor: true) as string;
+            if (string.IsNullOrEmpty(name))
+                name = item.ToString();
+            return ChoiceAvailability.StripMarkup(name) ?? name;
+        }
+        catch (System.Exception)
+        {
+            return "(unnamed)";
+        }
+    }
+}
+
 [HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowBlockWithCopy),
     new System.Type[] { typeof(string), typeof(string), typeof(string),
                         typeof(string), typeof(bool) })]
