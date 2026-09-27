@@ -146,38 +146,50 @@ static class ConversationPopupHook
     }
 }
 
-// A notification that only waits to be dismissed belongs in the log, not in
-// front of the player.
+// A notification that only asks to be dismissed does not belong in front of the
+// player, and it cannot be dismissed with a synthetic key: these popups block in a
+// Keyboard.getvk loop until a key arrives, and TutorialManager.AllowPushKey
+// returns false whenever ShowingPopup, so Keyboard.PushKey is refused for exactly
+// as long as the dialog is up. The refusal is silent, which is why pushing space
+// against a live notification looked like a dead action rather than a refused one.
 //
-// Popup.ShowSpace blocks until a key is pressed, and PushKey is refused while a
-// popup is showing -- TutorialManager.AllowPushKey returns false whenever
-// ShowingPopup -- so a harness cannot dismiss one by pushing the very key it
-// asks for. Granting a quest is exactly this: a dialog saying so, waiting for
-// space, with nothing to decide.
+// So the game's own escape hatch is used instead of rebuilding one. Popup has a
+// public static Suppress, and every blocking popup in this family already honours
+// it identically:
 //
-// So it is logged and skipped. The game's own logging path is used, so the line
-// reaches the console, the history command and the mod's log subscription, and
-// then the popup never opens. Dialogs that ask a question are untouched:
-// ShowConversation still publishes its options and waits for an answer.
+//     if (Suppress) { if (LogMessage) MessageQueue.AddPlayerMessage(Message); return Keys.Space; }
+//
+// That is the desired behaviour, already written by the game: the text is logged
+// through the game's own path, with its own wording, capitalisation and markup
+// handling, and nothing waits. Raising the flag around the call reuses that rather
+// than reimplementing the logging here, so there is one mechanism and no second
+// copy of the message format to drift.
+//
+// The flag is restored in a Finalizer rather than a Postfix because a Postfix is
+// skipped when the original throws, which would leave notifications suppressed for
+// the rest of the session.
+static class PopupSuppress
+{
+    internal static void Raise(ref bool __state)
+    {
+        __state = XRL.UI.Popup.Suppress;
+        XRL.UI.Popup.Suppress = true;
+    }
+
+    internal static void Restore(bool __state)
+    {
+        XRL.UI.Popup.Suppress = __state;
+    }
+}
+
 [HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowSpace),
     new System.Type[] { typeof(string), typeof(string), typeof(string),
                         typeof(ConsoleLib.Console.Renderable), typeof(bool),
                         typeof(bool), typeof(string) })]
 static class NotificationSpaceGate
 {
-    static bool Prefix(string Message)
-    {
-        try
-        {
-            QudGymBridge.LogMessage(Message);
-            return false;
-        }
-        catch (System.Exception ex)
-        {
-            QudGymBridge.Note("notification gate failed " + ex.GetBaseException().Message);
-            return true;
-        }
-    }
+    static void Prefix(ref bool __state) { PopupSuppress.Raise(ref __state); }
+    static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
 }
 
 [HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowBlockSpace),
@@ -186,17 +198,55 @@ static class NotificationSpaceGate
                         typeof(bool), typeof(bool) })]
 static class NotificationBlockSpaceGate
 {
-    static bool Prefix(string Message, string Prompt)
-    {
-        try
-        {
-            QudGymBridge.LogMessage(string.IsNullOrEmpty(Prompt) ? Message : Message + " " + Prompt);
-            return false;
-        }
-        catch (System.Exception ex)
-        {
-            QudGymBridge.Note("block notification gate failed " + ex.GetBaseException().Message);
-            return true;
-        }
-    }
+    static void Prefix(ref bool __state) { PopupSuppress.Raise(ref __state); }
+    static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
+}
+
+// Quest notices are the case that actually blocked: accepting Mehmet's quest put
+// up "You have received a new quest, What's Eating the Watervine?!" waiting for
+// space, with nothing to decide.
+//
+// The gate is on the five named Quest methods, not on Popup. Popup.Show is void
+// with 779 callers and is also how Wishing presents a maze choice, and
+// Popup.ShowBlock is how the Wishing well asks which maze to build; suppressing
+// either would silently remove a decision from the game. Popup.ShowBlock also
+// carries 14 callers, and at least one is a real choice, so a gate there would have
+// broken the Wishing well to fix a quest notice. One named method per notice, and
+// every popup that genuinely needs an answer is left alone.
+//
+// ShowFinishStepPopup and ShowFailStepPopup take a QuestStep and announce step
+// completion and failure the same way, so all five state changes are covered.
+[HarmonyPatch(typeof(XRL.World.Quest), nameof(XRL.World.Quest.ShowStartPopup))]
+static class QuestStartNoticeGate
+{
+    static void Prefix(ref bool __state) { PopupSuppress.Raise(ref __state); }
+    static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
+}
+
+[HarmonyPatch(typeof(XRL.World.Quest), nameof(XRL.World.Quest.ShowFailPopup))]
+static class QuestFailNoticeGate
+{
+    static void Prefix(ref bool __state) { PopupSuppress.Raise(ref __state); }
+    static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
+}
+
+[HarmonyPatch(typeof(XRL.World.Quest), nameof(XRL.World.Quest.ShowFailStepPopup))]
+static class QuestFailStepNoticeGate
+{
+    static void Prefix(ref bool __state) { PopupSuppress.Raise(ref __state); }
+    static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
+}
+
+[HarmonyPatch(typeof(XRL.World.Quest), nameof(XRL.World.Quest.ShowFinishPopup))]
+static class QuestFinishNoticeGate
+{
+    static void Prefix(ref bool __state) { PopupSuppress.Raise(ref __state); }
+    static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
+}
+
+[HarmonyPatch(typeof(XRL.World.Quest), nameof(XRL.World.Quest.ShowFinishStepPopup))]
+static class QuestFinishStepNoticeGate
+{
+    static void Prefix(ref bool __state) { PopupSuppress.Raise(ref __state); }
+    static void Finalizer(bool __state) { PopupSuppress.Restore(__state); }
 }
