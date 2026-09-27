@@ -63,6 +63,22 @@ module Plan =
         /// prompt it answers refer to the same list the game built. 0 is the
         /// game's escape, offered only when it permits one.
         | Answer of index: int
+        /// Answer the open prompt with the one option the game will accept.
+        ///
+        /// Positions are the right selector for a node the game always offers the
+        /// same way. They are the wrong selector for a choice the world gates: a
+        /// conversation that has begun the water ritual publishes five options
+        /// where it published six, and four of the five are greyed because they
+        /// cost more reputation than the player holds. The right answer was
+        /// position 4 before the ritual and position 5 after it, so a plan naming
+        /// a position is naming something that moved.
+        ///
+        /// What did not move is the game's own verdict, so this names that
+        /// instead. It resolves to the single option the game will take, and when
+        /// there is more than one it refuses rather than picking: two candidates
+        /// is ambiguous, and a plan that silently chose between them would be
+        /// indistinguishable from one that knew.
+        | Available
         /// If the test holds take the first plan, otherwise the second.
         | Branch of test: Test * whenTrue: Plan * whenFalse: Plan option
         /// Repeat the body until the test holds, or the limit is reached.
@@ -103,6 +119,42 @@ module Plan =
     /// `options [3; 1; 2; 0; 0]` -- ask for work, say you are looking for it,
     /// accept, then leave and cancel out.
     let answers (indices: int list) = All(List.map Answer indices)
+    /// Answer with the one option the game will accept.
+    let available = Available
+
+    /// The action id a plan uses to ask for "the one the game will accept".
+    ///
+    /// Not a number, because there is no number to write until the prompt is in
+    /// front of the harness. The session resolves it against the options the game
+    /// actually published, which is the only place that list exists.
+    [<Literal>]
+    let AvailableAction = "answer:avail"
+
+    /// The game's own index for an answer the observation numbered from one.
+    ///
+    /// The prompt publishes answer:1 for the first option because a list a human
+    /// reads starts at one; the game indexes the same list from zero. This is the
+    /// only place that conversion happens, which matters because it once did not
+    /// happen at all on the plan's path -- a plan's answer:3 selected the fourth
+    /// option, and the only reason that was not caught at once is that the plan
+    /// had been written by reading the game's own zero-based answer out of the
+    /// log, so the two mistakes cancelled.
+    ///
+    /// Zero is the cancel, and the game's value for a cancel is -1. Delivering a
+    /// zero there answers a different question than the one that was asked, which
+    /// is what made `esc` press the first option of a conversation.
+    let gameIndex (n: int) = if n = 0 then -1 else n - 1
+
+    /// What asking for an action turned into.
+    ///
+    /// Usually the action itself, so a plain availability check needs no ceremony.
+    /// The substitution is for the one action that names no position of its own:
+    /// "answer:avail" becomes whatever answer the live prompt resolves it to, or
+    /// nothing at all, and the reason travels with it so the failure says which of
+    /// the two went wrong -- no acceptable option, or more than one.
+    type Resolution =
+        | Pressed of action: string
+        | Refused of reason: string
     let choose test whenTrue whenFalse = Branch(test, whenTrue, whenFalse)
     let repeatUntil test body limit = Repeat(test, body, limit)
     let all plans = All plans
@@ -113,6 +165,7 @@ module Plan =
         | Act(a, _) -> [ a ]
         | Steer n -> [ "steer:" + n ]
         | Answer i -> [ "answer:" + string i ]
+        | Available -> [ AvailableAction ]
         | Branch(_, a, b) -> actions a @ (match b with Some x -> actions x | None -> [])
         | Repeat(_, body, _) -> actions body
         | All ps -> List.concat (List.map actions ps)
@@ -244,10 +297,10 @@ module Plan =
     /// action the world does not offer is reported as Unsupported rather than
     /// pushed, because a pushed-and-ignored action is indistinguishable from a
     /// successful one at the call site.
-    let rec advance (available: string -> bool) (view: View) (plan: Plan) : Outcome =
+    let rec advance (available: string -> Resolution) (view: View) (plan: Plan) : Outcome =
         advanceWith (fun _ -> ()) available view plan
 
-    and advanceWith (trace: string -> unit) (available: string -> bool) (view: View) (plan: Plan) : Outcome =
+    and advanceWith (trace: string -> unit) (available: string -> Resolution) (view: View) (plan: Plan) : Outcome =
         match plan with
         | Steer name ->
             // Hand the walk to the game's own pathfinder.
@@ -280,13 +333,16 @@ module Plan =
             | Some (_, ex, ey) ->
                 let move = "move_to:" + string ex + "," + string ey
                 trace ("goto " + name + " -> " + move)
-                if available move then Stepped(move, All []) else Skipped(All [])
+                match available move with
+                | Pressed a -> Stepped(a, All [])
+                | Refused _ -> Skipped(All [])
         | Act(action, guard) ->
             match guard with
             | Some g when not (g view) -> Skipped(All [])
             | _ ->
-                if available action then Stepped(action, All [])
-                else Unsupported(action, All [])
+                match available action with
+                | Pressed a -> Stepped(a, All [])
+                | Refused _ -> Unsupported(action, All [])
         | Answer index ->
             // Answering is delivered as an action id, so it travels the one path
             // every other action does and needs no second mechanism.
@@ -299,8 +355,17 @@ module Plan =
             // step with the conversation.
             let action = "answer:" + string index
             trace ("answer " + string index)
-            if available action then Stepped(action, All [])
-            else Unavailable("the game is not offering " + action, All [])
+            match available action with
+            | Pressed a -> Stepped(a, All [])
+            | Refused reason -> Unavailable(reason, All [])
+        | Available ->
+            // Resolved here rather than in the parser because the answer is a
+            // property of the prompt, and the prompt does not exist until the
+            // game raises it. A position written in a plan is fixed; this is not.
+            trace "answer the one option the game will accept"
+            match available AvailableAction with
+            | Pressed a -> Stepped(a, All [])
+            | Refused reason -> Unavailable(reason, All [])
         | Branch(test, whenTrue, whenFalse) ->
             if test view then advanceWith trace available view whenTrue
             else
@@ -383,11 +448,26 @@ module Plan =
                     // coordinates, so the walk uses no pathing of its own.
                     let rest = line.Substring(5).Trim()
                     if rest = "" then failwith "goto needs a name"
+                    // A trailing number is the step limit; everything before it is
+                    // the name.
+                    //
+                    // Names are the game's own DisplayNames and several of them
+                    // are two words -- "watervine farmer" -- so a two-token line
+                    // used to be read as name plus limit and then fail on
+                    // int "farmer". The world's name arrived as an arithmetic
+                    // error, which reads as a broken parser rather than a name it
+                    // did not expect. A number cannot be a name, so asking the
+                    // last token which it is settles both cases.
+                    let tokens =
+                        rest.Split([| ' ' |], StringSplitOptions.RemoveEmptyEntries) |> Array.toList
                     let name, limit =
-                        match rest.Split([| ' ' |], StringSplitOptions.RemoveEmptyEntries) with
-                        | [| n |] -> n, 200
-                        | [| n; k |] -> n, int k
-                        | _ -> failwithf "goto takes a name and an optional step limit: %s" line
+                        match List.rev tokens with
+                        | k :: others when others <> [] ->
+                            match Int32.TryParse k with
+                            | true, n -> List.rev others |> String.concat " ", n
+                            | _ -> rest, 200
+                        | _ -> rest, 200
+                    if name = "" then failwithf "goto takes a name: %s" line
                     Some(goto name limit)
                 elif line.StartsWith("if ", StringComparison.Ordinal) then
                     let body = line.Substring(3).Trim()
@@ -408,17 +488,26 @@ module Plan =
                     // changes between runs and a phrase selector would break on
                     // ordinary variation. `esc` is the game's own escape, index 0,
                     // which it offers only when it permits one.
+                    //
+                    // `avail` is the other half of that: a position names a place
+                    // in a list, and a list the world gates is a list that changes
+                    // length. The water ritual turned Mehmet's six options into
+                    // five and greyed four of them, so the right answer moved from
+                    // position 4 to position 5. `avail` names the game's own verdict
+                    // instead, and is the one token that survives that.
                     let rest = line.Substring(8).Trim()
                     if rest = "" then failwith "options needs at least one position"
+                    let pick (token: string) =
+                        if token.Equals("esc", StringComparison.OrdinalIgnoreCase) then Answer 0
+                        elif token.Equals("avail", StringComparison.OrdinalIgnoreCase) then Available
+                        else
+                            match Int32.TryParse token with
+                            | true, n -> Answer n
+                            | _ -> failwithf "options takes a position, 'esc' or 'avail': %s" token
                     let picks =
                         rest.Split([| ','; ' ' |], StringSplitOptions.RemoveEmptyEntries)
-                        |> Array.map (fun token ->
-                            if token.Equals("esc", StringComparison.OrdinalIgnoreCase) then 0
-                            else
-                                match Int32.TryParse(token) with
-                                | true, n -> n
-                                | _ -> failwithf "options takes a position or 'esc': %s" token)
+                        |> Array.map pick
                         |> Array.toList
-                    Some(answers picks)
+                    Some(All picks)
                 else Some(Act(line, None)))
         All(Array.toList steps)

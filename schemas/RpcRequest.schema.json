@@ -42,16 +42,16 @@
     "Release": {
       "additionalProperties": false,
       "properties": {
-        "handle": {
-          "maxLength": 160,
-          "minLength": 1,
-          "title": "Handle",
-          "type": "string"
-        },
         "op": {
           "const": "release",
           "default": "release",
           "title": "Op",
+          "type": "string"
+        },
+        "handle": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Handle",
           "type": "string"
         }
       },
@@ -84,16 +84,16 @@
     "Restore": {
       "additionalProperties": false,
       "properties": {
-        "handle": {
-          "maxLength": 160,
-          "minLength": 1,
-          "title": "Handle",
-          "type": "string"
-        },
         "op": {
           "const": "restore",
           "default": "restore",
           "title": "Op",
+          "type": "string"
+        },
+        "handle": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Handle",
           "type": "string"
         }
       },
@@ -119,10 +119,10 @@
     "Step": {
       "additionalProperties": false,
       "properties": {
-        "action_id": {
-          "maxLength": 160,
-          "minLength": 1,
-          "title": "Action Id",
+        "op": {
+          "const": "step",
+          "default": "step",
+          "title": "Op",
           "type": "string"
         },
         "decision_id": {
@@ -131,10 +131,10 @@
           "title": "Decision Id",
           "type": "string"
         },
-        "op": {
-          "const": "step",
-          "default": "step",
-          "title": "Op",
+        "action_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Action Id",
           "type": "string"
         }
       },
@@ -148,6 +148,18 @@
   },
   "additionalProperties": false,
   "properties": {
+    "protocol_version": {
+      "const": "0.1",
+      "default": "0.1",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "request_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Request Id",
+      "type": "string"
+    },
     "operation": {
       "discriminator": {
         "mapping": {
@@ -189,18 +201,6 @@
         }
       ],
       "title": "Operation"
-    },
-    "protocol_version": {
-      "const": "0.1",
-      "default": "0.1",
-      "title": "Protocol Version",
-      "type": "string"
-    },
-    "request_id": {
-      "maxLength": 160,
-      "minLength": 1,
-      "title": "Request Id",
-      "type": "string"
     }
   },
   "required": [

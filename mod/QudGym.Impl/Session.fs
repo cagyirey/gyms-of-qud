@@ -119,6 +119,37 @@ module Session =
     // prompt path that could disagree with the first about what is being asked.
     let mutable offeredTitle : string = ""
     let mutable offerCancellable : bool = false
+    // Which of those options the game will actually accept, decided by the game
+    // and read from the colour it rendered the choice in. A conversation gates
+    // choices on reputation and on what the journal holds, and it greys the ones
+    // it will refuse; answering a greyed choice is not an error, it is a no-op
+    // that leaves the player exactly where they were, having spent a turn.
+    let mutable offeredAcceptable : bool[] = [||]
+    /// The answer numbers a prompt genuinely offers, in the order they are shown.
+    ///
+    /// One definition, shared by the action list and by the guard that decides
+    /// whether a plan may press an answer. When those were two decisions they
+    /// disagreed: the guard asked only whether an id began with "answer:", so it
+    /// refused nothing, and `esc` -- which is answer:0 -- was accepted by a
+    /// conversation that cannot be cancelled, where 0 is the first *option*
+    /// rather than an escape. That is how leaving a conversation pressed a
+    /// reputation-gated choice instead.
+    ///
+    /// A choice the game will refuse is not offered. Naming one is not an error,
+    /// but answering it is a no-op that spends a turn, so the list stays a
+    /// description of what can actually happen.
+    let private answerNumbers (options: string[]) (acceptable: bool[]) (cancellable: bool) =
+        let pick =
+            options
+            |> Array.mapi (fun i _ -> i + 1)
+            |> Array.filter (fun n ->
+                let i = n - 1
+                // A missing verdict is not a refusal. The game told us nothing
+                // about this choice, so it stays answerable rather than quietly
+                // vanishing from a list the player can see.
+                i >= acceptable.Length || acceptable.[i])
+        if cancellable then Array.append [| 0 |] pick else pick
+
     let private episode =
         let bytes = Array.zeroCreate 12
         use rng = Security.Cryptography.RandomNumberGenerator.Create()
@@ -1063,7 +1094,7 @@ module Session =
                             else
                                 let nm = current.GetType().GetProperty("Speaker", BindingFlags.Instance ||| BindingFlags.Public)
                                 try show (nm.GetValue(current, null)) with _ -> ""
-                        Some(speaker, offeredTitle, offeredOptions, offerCancellable)
+                        Some(speaker, offeredTitle, offeredOptions, offeredAcceptable, offerCancellable)
                     else None)
             match fromPopup with
             | some when some.IsSome -> some
@@ -1071,45 +1102,53 @@ module Session =
                 // The legacy path reads the open conversation's choices rather
                 // than the call that raised it. A conversation has no title and
                 // cannot be cancelled, so it is normalised into the same shape.
+                // It carries no verdicts either, because the colours were read from
+                // the call and this path does not have it.
                 match conversationPrompt () with
-                | Some(speaker, options) -> Some(speaker, "", options, false)
+                | Some(speaker, options) -> Some(speaker, "", options, [||], false)
                 | None -> None
         let promptJson =
             match conversation with
             | None -> "null"
-            | Some (speaker, title, options, cancellable) ->
+            | Some (speaker, title, options, acceptable, cancellable) ->
                 let body =
                     if options.Length > 0 then String.concat " / " options else "(no options yet)"
                 let heading =
                     if title = "" then speaker
                     elif speaker = "" then title
                     else title + " -- " + speaker
+                // Which positions the game will refuse, 1-based to match the
+                // numbering of the options above. Published because "the game will
+                // not accept this" is part of what was asked: a conversation greys
+                // the choices that cost more reputation than the player holds, and
+                // answering one is not a refusal but a no-op that spends a turn.
+                let refused =
+                    options
+                    |> Array.mapi (fun i _ -> i + 1)
+                    |> Array.filter (fun n -> n - 1 < acceptable.Length && not acceptable.[n - 1])
                 sprintf
-                    "{\"kind\":\"choice\",\"text\":%s,\"options\":[%s],\"allow_cancel\":%b}"
+                    "{\"kind\":\"choice\",\"text\":%s,\"options\":[%s],\"allow_cancel\":%b,\"unavailable\":[%s]}"
                     (jsonString (if heading = "" then body else heading + ": " + body))
                     (String.concat "," (Array.map jsonString options))
                     cancellable
+                    (String.concat "," (Array.map string refused))
         let actions =
             match conversation with
-            | Some (_, _, options, cancellable) when options.Length > 0 ->
+            | Some (_, _, options, acceptable, cancellable) when options.Length > 0 ->
+                // Only what answerNumbers says is on offer, so the list cannot
+                // offer a choice the game will refuse or a cancel it forbids.
                 let answers =
-                    options
-                    |> Array.mapi (fun i text ->
-                        sprintf
-                            "{\"id\":%s,\"kind\":\"answer\",\"label\":%s,\"arguments\":{\"option\":%d}}"
-                            (jsonString ("answer:" + string (i + 1)))
-                            (jsonString text)
-                            (i + 1))
-                // Offered only when the game itself permits walking away, so the
-                // list stays a description of what is actually possible.
-                let withCancel =
-                    if not cancellable then answers
-                    else
-                        Array.append
-                            answers
-                            [| sprintf
-                                   "{\"id\":\"answer:0\",\"kind\":\"answer\",\"label\":\"(cancel)\",\"arguments\":{\"option\":0}}" |]
-                "[" + (String.concat "," withCancel) + "]"
+                    answerNumbers options acceptable cancellable
+                    |> Array.map (fun n ->
+                        if n = 0 then
+                            "{\"id\":\"answer:0\",\"kind\":\"answer\",\"label\":\"(cancel)\",\"arguments\":{\"option\":0}}"
+                        else
+                            sprintf
+                                "{\"id\":%s,\"kind\":\"answer\",\"label\":%s,\"arguments\":{\"option\":%d}}"
+                                (jsonString ("answer:" + string n))
+                                (jsonString options.[n - 1])
+                                n)
+                "[" + (String.concat "," answers) + "]"
             | _ -> actionsJsonSafe player
         let phase = if conversation.IsSome then "prompt" else "command"
         id, sprintf
@@ -1490,15 +1529,46 @@ module Session =
             match Int32.TryParse raw with
             | false, _ -> None
             | true, n when n >= 1 ->
-                let delivered =
+                // Refuse an answer the open prompt is not offering, for the same
+                // reason the plan's own answers are checked: a choice the game will
+                // refuse is not an error, it is a no-op that spends a turn.
+                //
+                // Only while a prompt is actually open. An answer that arrives
+                // between prompts has no list to be checked against, and the
+                // game's own key path is still the right thing to try -- that is
+                // how an answer is delivered when the wait has not started yet.
+                let onOffer =
                     lock gate (fun () ->
-                        if awaitingAnswer then
-                            answerArrived.TrySetResult (n - 1) |> ignore
-                            true
-                        else false)
-                if delivered then Some("CmdNone", box null)
-                elif pressAnswerKey (n - 1) then Some("CmdNone", box null)
-                else None
+                        not (offeredOptions.Length > 0)
+                        || (answerNumbers offeredOptions offeredAcceptable offerCancellable
+                            |> Array.contains n))
+                if not onOffer then
+                    say ("answer:" + string n + " is not on offer; refusing")
+                    None
+                else
+                    let delivered =
+                        lock gate (fun () ->
+                            if awaitingAnswer then
+                                answerArrived.TrySetResult (n - 1) |> ignore
+                                true
+                            else false)
+                    if delivered then Some("CmdNone", box null)
+                    elif pressAnswerKey (n - 1) then Some("CmdNone", box null)
+                    else None
+            // answer:0 is the cancel, and the game's own value for it is -1.
+            | true, 0 ->
+                let cancellable = lock gate (fun () -> offerCancellable || offeredOptions.Length = 0)
+                if not cancellable then
+                    say "answer:0 asked for a cancel this prompt does not offer; refusing"
+                    None
+                else
+                    let delivered =
+                        lock gate (fun () ->
+                            if awaitingAnswer then
+                                answerArrived.TrySetResult -1 |> ignore
+                                true
+                            else false)
+                    if delivered then Some("CmdNone", box null) else None
             | true, _ -> None
         else if action.StartsWith("talk:") then
             let name = action.Substring(5)
@@ -1709,14 +1779,15 @@ module Session =
     /// started from: -1 for a conversation, and the menu's own default selection
     /// for a menu, because -1 is not a legal answer to a menu that forbids escape.
     let conversationTurn (player: obj) (turn: int) (timeoutMilliseconds: int) (title: string)
-        (intro: string) (allowEscape: bool) (fallback: int) (options: string[]) =
+        (intro: string) (allowEscape: bool) (fallback: int) (options: string[]) (acceptable: bool[]) =
         let signal = TaskCompletionSource<int>()
         lock gate (fun () ->
             answerArrived <- signal
             awaitingAnswer <- true
             offeredOptions <- options
             offeredTitle <- title
-            offerCancellable <- allowEscape)
+            offerCancellable <- allowEscape
+            offeredAcceptable <- acceptable)
         try
             // Publish what the player is being asked. The observation carries
             // the options and offers only the answers to them.
@@ -1737,16 +1808,55 @@ module Session =
                 let plan = lock gate (fun () -> currentPlan)
                 match plan with
                 | Some p ->
-                    // Only the answers the game is offering count as available, so a
-                    // plan naming one that is not on offer does not get to press it.
-                    let offered (a: string) = a.StartsWith("answer:")
+                    // The answers this prompt is actually offering, so a plan naming
+                    // one that is not on offer does not get to press it.
+                    //
+                    // This used to test only that the id began with "answer:", which
+                    // every answer does, so it refused nothing. A plan's `esc` is
+                    // answer:0, and this path parsed the number without the n >= 1
+                    // rule the transport path enforces, so 0 became index 0 -- the
+                    // first option of a conversation that cannot be cancelled. The
+                    // plan asked to leave and the game was handed a choice.
+                    let offered a =
+                        let options, acceptable, cancellable =
+                            lock gate (fun () ->
+                                offeredOptions, offeredAcceptable, offerCancellable)
+                        let onOffer = answerNumbers options acceptable cancellable
+                        if a = Plan.AvailableAction then
+                            // The one the game will take. Resolved against the
+                            // options it just published, and refused when that is
+                            // not a single answer: two candidates is ambiguous,
+                            // and choosing between them silently would be
+                            // indistinguishable from knowing which was right.
+                            let acceptable =
+                                onOffer |> Array.filter (fun n -> n > 0)
+                            match acceptable with
+                            | [| only |] -> Plan.Pressed("answer:" + string only)
+                            | [||] ->
+                                Plan.Refused(
+                                    "no option the game will accept; it offered "
+                                    + string options.Length
+                                    + (if options.Length = 1 then " option" else " options")
+                                    + " and refused all of them")
+                            | many ->
+                                Plan.Refused(
+                                    "the game will accept "
+                                    + string many.Length
+                                    + " of its options ("
+                                    + (many |> Array.map string |> String.concat ", ")
+                                    + ") and the plan does not say which")
+                        else
+                            match Int32.TryParse(if a.StartsWith("answer:") then a.Substring(7) else "") with
+                            | true, n when Array.contains n onOffer -> Plan.Pressed a
+                            | true, _ -> Plan.Refused("the game is not offering " + a)
+                            | _ -> Plan.Refused("the game is not offering " + a)
                     let view: Plan.View =
                         { Plan.Player = player
                           Plan.Nearby = []
                           Plan.Entities = [] }
                     match Plan.advance offered view p with
                     | Plan.Stepped(action, rest) when action.StartsWith("answer:") ->
-                        let index = Int32.Parse(action.Substring(7))
+                        let index = Plan.gameIndex (Int32.Parse(action.Substring(7)))
                         say ("plan answers " + action)
                         lock gate (fun () -> currentPlan <- Some rest)
                         Some index
@@ -1802,9 +1912,19 @@ module Session =
                 | None -> None
                 | Some p ->
                     let available a =
-                        (match tryDirect player a with
-                         | Some _ -> true
-                         | None -> commandOf a player |> Option.isSome)
+                        // Resolved, not merely tested: "answer:avail" has no answer
+                        // until a prompt is open, and the command phase is not one.
+                        // Naming it here reports the step as unavailable rather
+                        // than stepping an id the game cannot use.
+                        if a = Plan.AvailableAction then
+                            Plan.Refused(
+                                "no prompt is open, so there is no option to take; 'avail' answers a conversation")
+                        elif (match tryDirect player a with
+                              | Some _ -> true
+                              | None -> commandOf a player |> Option.isSome) then
+                            Plan.Pressed a
+                        else
+                            Plan.Refused("the action space is not offering " + a)
                     // Gather the view the plan's tests read, from the same
                     // entity walk the observation publishes, so a plan and the
                     // observation beside it can never disagree about what is

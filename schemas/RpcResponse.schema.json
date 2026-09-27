@@ -23,17 +23,6 @@
   },
   "additionalProperties": false,
   "properties": {
-    "error": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/RpcError"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
     "protocol_version": {
       "const": "0.1",
       "default": "0.1",
@@ -50,6 +39,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/JsonValue"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RpcError"
         },
         {
           "type": "null"

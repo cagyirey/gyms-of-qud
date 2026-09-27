@@ -130,10 +130,13 @@ static class ConversationPopupHook
         try
         {
             var options = Options == null ? new string[0] : Options.ToArray();
-            QudGymBridge.Note("conversation popup '" + (Title ?? "") + "' options=" + options.Length);
-            foreach (var o in options)
-                QudGymBridge.Note("  option: " + o);
-            int chosen = QudGymBridge.ConversationTurn(options, 120000);
+            var acceptable = ChoiceAvailability.From(options);
+            QudGymBridge.Note("conversation popup '" + (Title ?? "") + "' options=" + options.Length
+                + " blocked=" + ChoiceAvailability.Blocked(acceptable));
+            for (int i = 0; i < options.Length; i++)
+                QudGymBridge.Note("  option: " + options[i]
+                    + (acceptable[i] ? "" : "   [the game will not accept this]"));
+            int chosen = QudGymBridge.ConversationTurn(options, acceptable, 120000);
             __result = chosen;
             return false;
         }
@@ -290,7 +293,8 @@ static class PickOptionGate
             int fallback = AllowEscape ? -1 : DefaultSelected;
 
             QudGymBridge.Note("menu '" + (Title ?? "") + "' options=" + options.Length
-                + " escape=" + AllowEscape + " default=" + DefaultSelected);
+                + " escape=" + AllowEscape + " default=" + DefaultSelected
+                + " blocked=" + ChoiceAvailability.Blocked(ChoiceAvailability.From(options)));
             for (int i = 0; i < options.Length && i < 12; i++)
                 QudGymBridge.Note("  option: " + options[i]);
 

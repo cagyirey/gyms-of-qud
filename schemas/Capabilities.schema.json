@@ -1,19 +1,15 @@
 {
   "additionalProperties": false,
   "properties": {
+    "protocol_version": {
+      "const": "0.1",
+      "default": "0.1",
+      "title": "Protocol Version",
+      "type": "string"
+    },
     "backend": {
       "title": "Backend",
       "type": "string"
-    },
-    "deterministic_restore": {
-      "default": false,
-      "title": "Deterministic Restore",
-      "type": "boolean"
-    },
-    "full_state_hash": {
-      "default": false,
-      "title": "Full State Hash",
-      "type": "boolean"
     },
     "game_build": {
       "title": "Game Build",
@@ -23,15 +19,19 @@
       "title": "Is Mock",
       "type": "boolean"
     },
-    "protocol_version": {
-      "const": "0.1",
-      "default": "0.1",
-      "title": "Protocol Version",
-      "type": "string"
-    },
     "snapshot": {
       "default": false,
       "title": "Snapshot",
+      "type": "boolean"
+    },
+    "deterministic_restore": {
+      "default": false,
+      "title": "Deterministic Restore",
+      "type": "boolean"
+    },
+    "full_state_hash": {
+      "default": false,
+      "title": "Full State Hash",
       "type": "boolean"
     }
   },

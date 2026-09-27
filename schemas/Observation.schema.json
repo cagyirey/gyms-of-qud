@@ -3,13 +3,6 @@
     "CandidateAction": {
       "additionalProperties": false,
       "properties": {
-        "arguments": {
-          "additionalProperties": {
-            "$ref": "#/$defs/JsonValue"
-          },
-          "title": "Arguments",
-          "type": "object"
-        },
         "id": {
           "maxLength": 160,
           "minLength": 1,
@@ -32,6 +25,13 @@
         "label": {
           "title": "Label",
           "type": "string"
+        },
+        "arguments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Arguments",
+          "type": "object"
         }
       },
       "required": [
@@ -46,39 +46,23 @@
     "PerceivedEntity": {
       "additionalProperties": false,
       "properties": {
-        "glyph": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Glyph"
-        },
         "id": {
           "maxLength": 160,
           "minLength": 1,
           "title": "Id",
           "type": "string"
         },
-        "is_actor": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Is Actor"
-        },
         "name": {
           "title": "Name",
           "type": "string"
+        },
+        "x": {
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "title": "Y",
+          "type": "integer"
         },
         "perceived_status": {
           "anyOf": [
@@ -92,13 +76,29 @@
           "default": null,
           "title": "Perceived Status"
         },
-        "x": {
-          "title": "X",
-          "type": "integer"
+        "glyph": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Glyph"
         },
-        "y": {
-          "title": "Y",
-          "type": "integer"
+        "is_actor": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Is Actor"
         }
       },
       "required": [
@@ -113,6 +113,14 @@
     "Player": {
       "additionalProperties": false,
       "properties": {
+        "x": {
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "title": "Y",
+          "type": "integer"
+        },
         "hp": {
           "minimum": 0,
           "title": "Hp",
@@ -121,14 +129,6 @@
         "max_hp": {
           "exclusiveMinimum": 0,
           "title": "Max Hp",
-          "type": "integer"
-        },
-        "x": {
-          "title": "X",
-          "type": "integer"
-        },
-        "y": {
-          "title": "Y",
           "type": "integer"
         }
       },
@@ -144,11 +144,6 @@
     "Prompt": {
       "additionalProperties": false,
       "properties": {
-        "allow_cancel": {
-          "default": false,
-          "title": "Allow Cancel",
-          "type": "boolean"
-        },
         "kind": {
           "enum": [
             "choice",
@@ -159,6 +154,10 @@
           "title": "Kind",
           "type": "string"
         },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
         "options": {
           "default": [],
           "items": {
@@ -167,9 +166,18 @@
           "title": "Options",
           "type": "array"
         },
-        "text": {
-          "title": "Text",
-          "type": "string"
+        "unavailable": {
+          "default": [],
+          "items": {
+            "type": "integer"
+          },
+          "title": "Unavailable",
+          "type": "array"
+        },
+        "allow_cancel": {
+          "default": false,
+          "title": "Allow Cancel",
+          "type": "boolean"
         }
       },
       "required": [
@@ -188,14 +196,14 @@
           "title": "Radius",
           "type": "integer"
         },
-        "zone_height": {
-          "minimum": 0,
-          "title": "Zone Height",
-          "type": "integer"
-        },
         "zone_width": {
           "minimum": 0,
           "title": "Zone Width",
+          "type": "integer"
+        },
+        "zone_height": {
+          "minimum": 0,
+          "title": "Zone Height",
           "type": "integer"
         }
       },
@@ -210,12 +218,11 @@
   },
   "additionalProperties": false,
   "properties": {
-    "actions": {
-      "items": {
-        "$ref": "#/$defs/CandidateAction"
-      },
-      "title": "Actions",
-      "type": "array"
+    "episode_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Episode Id",
+      "type": "string"
     },
     "decision_id": {
       "maxLength": 160,
@@ -223,27 +230,10 @@
       "title": "Decision Id",
       "type": "string"
     },
-    "entities": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/PerceivedEntity"
-      },
-      "title": "Entities",
-      "type": "array"
-    },
-    "episode_id": {
-      "maxLength": 160,
-      "minLength": 1,
-      "title": "Episode Id",
-      "type": "string"
-    },
-    "messages": {
-      "default": [],
-      "items": {
-        "type": "string"
-      },
-      "title": "Messages",
-      "type": "array"
+    "turn": {
+      "minimum": 0,
+      "title": "Turn",
+      "type": "integer"
     },
     "phase": {
       "enum": [
@@ -256,6 +246,29 @@
     },
     "player": {
       "$ref": "#/$defs/Player"
+    },
+    "tiles": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tiles",
+      "type": "array"
+    },
+    "entities": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PerceivedEntity"
+      },
+      "title": "Entities",
+      "type": "array"
+    },
+    "messages": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Messages",
+      "type": "array"
     },
     "prompt": {
       "anyOf": [
@@ -276,17 +289,12 @@
       "title": "Quests",
       "type": "array"
     },
-    "tiles": {
+    "actions": {
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/CandidateAction"
       },
-      "title": "Tiles",
+      "title": "Actions",
       "type": "array"
-    },
-    "turn": {
-      "minimum": 0,
-      "title": "Turn",
-      "type": "integer"
     },
     "view": {
       "anyOf": [

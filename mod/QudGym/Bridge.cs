@@ -5,6 +5,70 @@ using UnityEngine;
 
 // The game only reflects types in the assembly it compiles from .cs files.
 // The probe itself lives in the F# library next to this mod.
+// Whether the game will accept a given choice, read from the game itself.
+//
+// A conversation marks a choice it will not accept by rendering that choice in
+// colour K. Choice.GetTextColor returns "G", or "g" once the choice has already
+// been taken, and any IConversationPart can override it with a ColorTextEvent.
+// Across the game's own parts that override is only ever used to say "blocked":
+//
+//     RequireReputation  -> "K" unless PlayerReputation meets the requirement
+//     IWaterRitualPart   -> "K" when !Affordable || !Available
+//     SecretHandler      -> "K" when a required note is not in the journal
+//
+// So K is the whole of the game's vocabulary for a choice it will refuse, and
+// G/g/M mean only fresh, already-taken, and secret-revealed respectively.
+//
+// The colour is read from the tag the game already put at the front of the string.
+// IConversationElement.GetDisplayText(WithColor: true) builds "{{<color>|text}}" by
+// prepending, so the colour is the first tag and the first '|' closes it. That is
+// reading the game's own verdict rather than matching its wording, which is the
+// only thing that survives the wording changing between runs -- the same node has
+// been offered as "I'm looking for work.", "Do you have work that needs doing?"
+// and "My services are available if you have work to offer."
+//
+// Only the first tag is read, because a choice's trailing tag is styled
+// independently. "Live and drink. {{K|[End]}}" is the game's own exit and it is
+// selectable, so searching the whole string for K would refuse a working choice.
+static class ChoiceAvailability
+{
+    /// <summary>Per option: true when the game will accept it.</summary>
+    public static bool[] From(string[] options)
+    {
+        if (options == null)
+            return null;
+        var acceptable = new bool[options.Length];
+        for (int i = 0; i < options.Length; i++)
+            acceptable[i] = Accepts(options[i]);
+        return acceptable;
+    }
+
+    public static bool Accepts(string option)
+    {
+        if (string.IsNullOrEmpty(option) || !option.StartsWith("{{", StringComparison.Ordinal))
+            return true;
+        int bar = option.IndexOf('|');
+        // "{{" with no '|' is not a tag the game wrote, so there is no verdict to
+        // read. Treating it as acceptable keeps an unreadable option answerable
+        // rather than silently removing a choice the player can see.
+        return bar < 0 || option.Substring(2, bar - 2) != "K";
+    }
+
+    /// <summary>How many of the offered options the game will refuse.</summary>
+    public static string Blocked(bool[] acceptable)
+    {
+        if (acceptable == null)
+            return "?";
+        int blocked = 0;
+        for (int i = 0; i < acceptable.Length; i++)
+        {
+            if (!acceptable[i])
+                blocked++;
+        }
+        return blocked.ToString();
+    }
+}
+
 static class QudGymBridge
 {
     static MethodInfo record;
@@ -182,7 +246,12 @@ static class QudGymBridge
     /// conversation loop runs; the loop blocks there for a human's keys, and this
     /// is the same block, except the options are published and the answer comes
     /// back over the transport.
-    public static int ConversationTurn(string[] options, int timeoutMilliseconds)
+    ///
+    /// `acceptable` is the game's own verdict per option, from ChoiceAvailability.
+    /// It travels with the options rather than being recomputed downstream because
+    /// it is a fact about the game, and the F# side should not have to know that
+    /// the game spells "blocked" as a colour.
+    public static int ConversationTurn(string[] options, bool[] acceptable, int timeoutMilliseconds)
     {
         Ensure();
         if (conversationTurn == null)
@@ -200,7 +269,7 @@ static class QudGymBridge
             // answer when nobody replies, which is what this always did.
             return (int)conversationTurn.Invoke(
                 null,
-                new object[] { player, turn, timeoutMilliseconds, "", "", false, -1, options });
+                new object[] { player, turn, timeoutMilliseconds, "", "", false, -1, options, acceptable });
         }
         catch (Exception ex)
         {
@@ -239,7 +308,8 @@ static class QudGymBridge
                 new object[]
                 {
                     player, turn, timeoutMilliseconds, title ?? "", intro ?? "",
-                    allowEscape, defaultSelected, options ?? new string[0]
+                    allowEscape, defaultSelected, options ?? new string[0],
+                    ChoiceAvailability.From(options)
                 });
         }
         catch (Exception ex)

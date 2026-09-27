@@ -74,6 +74,19 @@ class Prompt(Model):
     # that cannot see them cannot answer, and one shown a paraphrase may answer
     # the wrong thing. Empty when the prompt is not a choice.
     options: tuple[str, ...] = ()
+    # The positions, 1-based like the options above, that the game itself will not
+    # accept. Published because it is part of what was asked.
+    #
+    # A conversation greys a choice it will refuse -- one that costs more
+    # reputation than the player holds, or asks for a note the journal does not
+    # have -- and that grey is the game's own verdict, not a guess. Answering such
+    # a choice is not an error: the conversation simply stays where it was, having
+    # spent a turn. So a caller told only the option text cannot tell a choice it
+    # may take from one it may not, and would spend turns on the second kind.
+    #
+    # Empty when the game expressed no verdict, which is not the same as every
+    # option being available.
+    unavailable: tuple[int, ...] = ()
     # Whether the game itself would let the player walk away from this prompt.
     #
     # PickOption carries an AllowEscape flag, and a cancelled menu returns -1
