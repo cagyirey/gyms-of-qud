@@ -182,6 +182,19 @@ checkEq
     [ "steer:watervine farmer"; "talk:watervine farmer"; "answer:4"; "answer:avail" ]
     (parse "goto watervine farmer\ntalk:watervine farmer\noptions 4, avail" |> Plan.actions)
 
+// The game's continue node offers one option, and a player presses a key for it.
+// That is the same request as `avail`, so it is the same step -- two spellings,
+// one resolution, because two names for one behaviour is how they drift.
+checkEq
+    "enter is the one option the game will accept, spelled the way a player would"
+    [ "answer:avail" ]
+    (parse "options enter" |> Plan.actions)
+
+checkEq
+    "a mixed sequence parses: positions, enter and esc together"
+    [ "answer:3"; "answer:1"; "answer:2"; "answer:avail"; "answer:0" ]
+    (parse "options 3, 1, 2, enter, esc" |> Plan.actions)
+
 check "a token that is neither a position nor a keyword is rejected"
     (try
         parse "options 3, please" |> ignore

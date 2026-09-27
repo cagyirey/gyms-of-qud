@@ -98,7 +98,15 @@ module Session =
     /// Bounded poll slice for the turn-thread wait, in milliseconds.
     let mutable private pollMilliseconds = 20
 
-    let private first = TaskCompletionSource<Slot>()
+    // One per episode, replaced when a new one starts.
+    //
+    // This was a single process-lifetime task, which is the same thing as saying a
+    // process holds one episode: reset could wait for a first boundary exactly
+    // once, and a second episode had no boundary to wait for even if the game
+    // could have produced one. Re-creating it per episode is what lets reset be
+    // called more than once, and it is the only reason to try -- a second episode
+    // that cannot be observed is a second episode nobody can learn from.
+    let mutable private first = TaskCompletionSource<Slot>()
 
     // A conversation blocks the game turn thread inside its own key loop, which
     // is how the game itself works: a human types the keys that loop is waiting
@@ -119,6 +127,10 @@ module Session =
     // prompt path that could disagree with the first about what is being asked.
     let mutable offeredTitle : string = ""
     let mutable offerCancellable : bool = false
+    // A re-embark asked for by the client, performed at the next decision
+    // boundary. Set on the transport thread, read and cleared on the game turn
+    // thread, which is the only thread a decision boundary runs on.
+    let mutable private reembarkWanted = false
     // Which of those options the game will actually accept, decided by the game
     // and read from the colour it rendered the choice in. A conversation gates
     // choices on reputation and on what the journal holds, and it greys the ones
@@ -1899,7 +1911,35 @@ module Session =
             // consulted before the client queue so a plan is not starved by a
             // waiting client, and it is advanced exactly one action per turn so
             // the world is observed between steps.
+            // A re-embark, performed here because a decision boundary is the only
+            // point where the game is quiescent and this thread is the core
+            // thread. After it, this turn has nothing to serve: the old world is
+            // gone and the next boundary belongs to the new one, which a client
+            // reaches by resetting again.
+            let reembarked =
+                lock gate (fun () ->
+                    if reembarkWanted then
+                        reembarkWanted <- false
+                        true
+                    else false)
+            if reembarked then (
+                say "reembark requested; running the game's own new-game path"
+                Embark.reembark logPath
+                say "reembark returned; awaiting the new episode's first boundary"
+                // The old episode's pending answers and plan belong to a world
+                // that no longer exists.
+                lock gate (fun () ->
+                    currentPlan <- None
+                    offeredOptions <- [||]
+                    offeredTitle <- ""
+                    offerCancellable <- false
+                    offeredAcceptable <- [||]
+                    awaitingAnswer <- false
+                    answerArrived <- TaskCompletionSource<int>())
+                running <- false)
             let fromPlan =
+                if not running then None
+                else
                 match currentPlan with
                 | None -> None
                 | Some p ->
@@ -2218,14 +2258,19 @@ module Session =
                 // left a work item parked on `first` and every later request,
                 // hello included, blocked behind it. Consuming resetUsed before
                 // the wait made it worse -- the retry could not even claim.
+                // A claim, not a one-shot. The episode a reset observes is the one
+                // in flight or the next one to start, so a client that wants a
+                // fresh world asks for a re-embark first and then resets onto it.
+                // The gate is what stops two resets claiming the same boundary and
+                // both reporting it as their own.
                 let claimed =
                     lock gate (fun () ->
-                        if resetUsed || resetInFlight then false
+                        if resetInFlight then false
                         else
                             resetInFlight <- true
                             true)
                 if not claimed then
-                    fail requestId "unsupported" "This process holds one episode; start another game to reset"
+                    fail requestId "reset_in_flight" "Another reset is already waiting for a boundary"
                 else
                     let acquired = try first.Task.Wait 30000 with _ -> false
                     let slot =
@@ -2236,7 +2281,10 @@ module Session =
                     | Some s ->
                         lock gate (fun () ->
                             resetInFlight <- false
-                            resetUsed <- true)
+                            resetUsed <- true
+                            // The next reset wants the next episode's boundary, not
+                            // this one again, so the task it waited on is retired.
+                            first <- TaskCompletionSource<Slot>())
                         ok requestId (transition s.Index s.Turn s.Observation)
                     | None ->
                         lock gate (fun () -> resetInFlight <- false)
@@ -2356,6 +2404,20 @@ module Session =
                             (jsonString (String.concat "," named)))
                 with ex ->
                     fail requestId "bad_program" (ex.GetBaseException().Message)
+        | "reembark" ->
+            // Ask for a second episode in this process.
+            //
+            // The request is recorded here and performed at the next decision
+            // boundary, because a boundary is the one place the game is quiescent
+            // and the core thread belongs to us. Doing it on this thread instead
+            // would be building a world on the transport thread while the turn
+            // thread is inside the game's own loop.
+            //
+            // Not a restore, and not a state mutation: Embark.reembark runs the
+            // game's own Release / CreateNewGame / Reset sequence. Snapshot,
+            // restore and full_state_hash stay disabled and unreachable from here.
+            lock gate (fun () -> reembarkWanted <- true)
+            ok requestId "{\"accepted\":true,\"at\":\"next decision boundary\"}"
         | "plan_status" ->
             let running, steps, note, trace, pending =
                 lock gate (fun () ->

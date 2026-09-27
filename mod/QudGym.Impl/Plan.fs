@@ -547,6 +547,10 @@ module Plan =
                     // ordinary variation. `esc` is the game's own escape, index 0,
                     // which it offers only when it permits one.
                     //
+                    // `enter` is the same request under the name a player would
+                    // use: the game's continue node offers one option and the
+                    // player presses a key.
+                    //
                     // `avail` is the other half of that: a position names a place
                     // in a list, and a list the world gates is a list that changes
                     // length. The water ritual turned Mehmet's six options into
@@ -557,7 +561,13 @@ module Plan =
                     if rest = "" then failwith "options needs at least one position"
                     let pick (token: string) =
                         if token.Equals("esc", StringComparison.OrdinalIgnoreCase) then Answer 0
+                        // `enter` and `avail` are one request, so they are one
+                        // step. The game's continue node is a prompt offering a
+                        // single option, and taking the one option the game will
+                        // accept is exactly that; a second spelling with its own
+                        // resolution would be a second way to be wrong.
                         elif token.Equals("avail", StringComparison.OrdinalIgnoreCase) then Available
+                        elif token.Equals("enter", StringComparison.OrdinalIgnoreCase) then Available
                         else
                             match Int32.TryParse token with
                             | true, n -> Answer n
