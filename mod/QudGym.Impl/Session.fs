@@ -1604,6 +1604,13 @@ module Session =
             || action = "space"
             || action = "continue"
             || action.StartsWith("talk:")
+            || action.StartsWith("use:")
+            // The action space publishes get:<name> for every object it can see, and
+            // step refused it as not a candidate -- so an advertised action could
+            // not be taken. The prefixes are read off the same table the action
+            // list is built from rather than restated, because a second answer to
+            // "what can this do" is how the space and the executor drift apart.
+            || action.StartsWith("get:")
             || action.StartsWith("goto ")
             || action.StartsWith("steer:")
             || action.StartsWith("wield:")
