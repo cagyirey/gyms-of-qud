@@ -162,6 +162,16 @@ checkEq
 // Names are the game's DisplayNames and several are two words. A two-token
 // line used to be read as name plus step limit, and then int "farmer" threw --
 // so the world's own name arrived as an arithmetic error.
+// A target that is not in view yet is explored for, not refused. The observation
+// only publishes what is within its radius, so refusing made every plan that had to
+// go somewhere new -- a chest across Joppa, Red Rock -- unreachable.
+checkEq
+    "an absent target explores rather than refusing"
+    [ "autoexplore" ]
+    (match Plan.advance (fun _ -> Plan.Pressed "autoexplore") bare (parse "goto woven basket") with
+     | Plan.Stepped(action, _) -> [ action ]
+     | _ -> [])
+
 checkEq
     "a two-word name is a name, not a name and a step limit"
     [ "steer:watervine farmer" ]

@@ -323,13 +323,26 @@ module Plan =
             // saying so is the useful answer. "watervine farmer" is.
             match findEntity view name with
             | None ->
-                let known =
-                    view.Entities
-                    |> List.map (fun (n, _, _) -> n)
-                    |> List.distinct
-                    |> String.concat ", "
-                trace ("goto " + name + " is not published; the world offers: " + known)
-                Unavailable("no target named " + name + "; published: " + known, All [])
+                // Not in view yet. Explore instead of giving up.
+                //
+                // The observation only publishes what is within its view radius, so
+                // a chest across Joppa is genuinely not named until the player has
+                // been near it. Refusing meant a plan could not reach anything it
+                // had not already seen -- which is most of the map, and every quest
+                // that says "go somewhere you have not been".
+                //
+                // The repeat re-issues this decision each turn, so one exploration
+                // step per turn sweeps the zone until the target is published, and
+                // the walk takes over from there. If exploration runs out, the
+                // target is genuinely absent and the reason below says so with the
+                // names the world does offer.
+                //
+                // The repeat's own limit is the search budget, so there is no second
+                // bound here: when it runs out the repeat reports Exhausted, which
+                // says the search was bounded rather than that the thing is absent.
+                // Nothing is claimed about absence here, because nothing is known.
+                trace ("goto " + name + " is not in view; exploring to find it")
+                Stepped("autoexplore", All [])
             | Some (_, ex, ey) ->
                 let move = "move_to:" + string ex + "," + string ey
                 trace ("goto " + name + " -> " + move)
