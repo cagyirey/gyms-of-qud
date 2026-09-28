@@ -517,6 +517,88 @@ static class PickItemGate
     }
 }
 
+// The blocking primitive itself, rather than the popups that reach it.
+//
+// This is where the space bar comes from. Popup.ShowBlockWithCopy -- the "copy this
+// text" popup raised when a description is examined -- does this when the modern UI
+// is on, which it is, because UIManager.UseNewPopups is Options.ModernUI:
+//
+//     if (UIManager.UseNewPopups) {
+//         WaitNewPopupMessage(Message, PopupMessage.CopyButton, ...);
+//         Keyboard.ClearInput(...);
+//         return Keys.Space;
+//     }
+//
+// The method's own return value is Keys.Space: the game is telling its caller which
+// key dismissed it. It waits for a key, and a synthetic one cannot be delivered.
+//
+// Gating ShowBlockWithCopy does not fix that, because WaitNewPopupMessage has other
+// callers -- the Wishing well among them -- and every one of them blocks the same
+// way. Gating the primitive covers all of them, and it is the same thing the flag
+// Popup.Suppress would have covered if this method consulted it. It does not: among
+// the sixteen public popups, eight check Suppress and this is one of the eight that
+// do not, which is why tests/test_popup_coverage.py listed it as a gap rather than
+// pretending it was handled.
+//
+// The buttons are published so a caller can press one, and the callback is invoked
+// with the chosen item, because several callers -- ShowBlockWithCopy among them --
+// act on the callback rather than on anything this returns.
+[HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.WaitNewPopupMessage))]
+static class WaitNewPopupMessageGate
+{
+    static void Prefix(string message,
+                       System.Collections.Generic.List<Qud.UI.QudMenuItem> buttons,
+                       System.Action<Qud.UI.QudMenuItem> callback,
+                       System.Collections.Generic.List<Qud.UI.QudMenuItem> options,
+                       string title)
+    {
+        try
+        {
+            // A popup with no buttons and no options is a notice, not a question, so
+            // it is logged and released. Publishing an empty list would offer a
+            // caller nothing to press and invent a question that was not asked.
+            // QudMenuItem is a struct with public text/command fields, so it cannot
+            // be null-checked and has no display method to call. Both cost a compile
+            // error, which is the game stating its own shape.
+            var labels = new System.Collections.Generic.List<string>();
+            var items = new System.Collections.Generic.List<Qud.UI.QudMenuItem>();
+            if (buttons != null)
+                foreach (var button in buttons)
+                {
+                    labels.Add(string.IsNullOrEmpty(button.text) ? (button.command ?? "?") : button.text);
+                    items.Add(button);
+                }
+            if (labels.Count == 0 && options != null)
+                foreach (var option in options)
+                {
+                    labels.Add(string.IsNullOrEmpty(option.text) ? (option.command ?? "?") : option.text);
+                    items.Add(option);
+                }
+
+            QudGymBridge.Note("newpopup '" + (title ?? "") + "' message=" + (message ?? "")
+                + " buttons=" + labels.Count);
+
+            if (labels.Count == 0)
+            {
+                QudGymBridge.LogMessage(ConsoleLib.Console.Markup.Strip(message ?? ""));
+                return;
+            }
+
+            int chosen = QudGymBridge.MenuTurn(title ?? "", message ?? "", labels.ToArray(), true, 0, 60000);
+            if (chosen >= 0 && chosen < items.Count && callback != null)
+                callback(items[chosen]);
+        }
+        catch (System.Exception ex)
+        {
+            QudGymBridge.Note("newpopup gate failed " + ex.GetBaseException().Message);
+        }
+    }
+
+    // The original is always skipped: this method exists only to wait, and waiting
+    // is the thing that cannot be done here.
+    static bool Prefix() => false;
+}
+
 [HarmonyPatch(typeof(XRL.UI.Popup), nameof(XRL.UI.Popup.ShowBlockWithCopy),
     new System.Type[] { typeof(string), typeof(string), typeof(string),
                         typeof(string), typeof(bool) })]

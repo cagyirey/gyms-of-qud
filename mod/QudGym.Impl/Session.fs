@@ -1616,6 +1616,49 @@ module Session =
             || action.StartsWith("wield:")
             || action.StartsWith("equip:")
 
+    /// Send the player to a distant square in one action, the way the game does.
+    ///
+    /// This is CmdMoveTo's own body once its picker has returned a cell:
+    ///
+    ///     if (!cell.IsAdjacentTo(currentCell)) {
+    ///         PlayerAvoid.Clear();
+    ///         AutoAct.Setting = "M" + cell.X + "," + cell.Y;
+    ///         return;
+    ///     }
+    ///
+    /// Both halves are needed and the first is the easy one to miss. PlayerAvoid is
+    /// a CleanQueue<SortPoint> on the XRLCore instance, and while it holds anything
+    /// the player does not move. Setting AutoAct alone therefore leaves the
+    /// autopilot marked as walking with the player rooted -- which is why an earlier
+    /// attempt here concluded that AutoAct "only marks the autopilot as walking" and
+    /// could not be used. It can be. The queue was in the way.
+    ///
+    /// The game then walks over as many turns as it likes, on its own pathfinder
+    /// with its own nav weights. No route is planned here.
+    let private autoActTo (tx: int) (ty: int) =
+        try
+            let core = (gameAssembly ()).GetType("XRL.Core.XRLCore", false)
+            let instance =
+                core.GetField("Core", Reflection.BindingFlags.Static ||| Reflection.BindingFlags.Public).GetValue(null)
+            if isNull instance then false
+            else
+                let avoid = instance.GetType().GetField("PlayerAvoid", Reflection.BindingFlags.Instance ||| Reflection.BindingFlags.Public)
+                if not (isNull avoid) then
+                    let queue = avoid.GetValue(instance)
+                    if not (isNull queue) then
+                        queue.GetType().GetMethod("Clear").Invoke(queue, [||]) |> ignore
+                let autoAct = (gameAssembly ()).GetType("XRL.World.Capabilities.AutoAct", false)
+                if isNull autoAct then false
+                else
+                    let setting = autoAct.GetProperty("Setting", Reflection.BindingFlags.Static ||| Reflection.BindingFlags.Public)
+                    if isNull setting then false
+                    else
+                        setting.SetValue(null, "M" + string tx + "," + string ty)
+                        true
+        with ex ->
+            say ("autoActTo failed: " + (ex.GetBaseException().Message))
+            false
+
     let private tryDirect (player: obj) (action: string) =
         if action.StartsWith("move_to:") then
             // One step of the game's own route, requested fresh each turn.
@@ -1624,6 +1667,22 @@ module Session =
             else
                 try
                     let tx, ty = int (parts.[0].Trim()), int (parts.[1].Trim())
+                    // Not adjacent: hand the whole walk to the game in one action,
+                    // which is what CmdMoveTo does once its picker has chosen a
+                    // cell. Only an adjacent target needs a single step, and then
+                    // the game's own direction is used. The game walks over as many
+                    // turns as it likes, on its own pathfinder; nothing here plans
+                    // a route.
+                    let adjacentHere =
+                        try
+                            let cell = memberValue player "CurrentCell"
+                            let zone = memberValue cell "ParentZone"
+                            let target = call zone "GetCell" [| box tx; box ty |]
+                            not (isNull target)
+                            && (target.GetType().GetMethod("IsAdjacentTo").Invoke(target, [| box cell |]) :?> bool)
+                        with _ -> false
+                    if not adjacentHere && autoActTo tx ty then Some("CmdNone", box null)
+                    else
                     match pathStepTo player tx ty with
                     | Some step ->
                         match moveVerbFor step with

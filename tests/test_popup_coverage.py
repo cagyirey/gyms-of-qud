@@ -38,6 +38,7 @@ SUPPRESSED = {
 
 # Gated by name, because they ignore the flag.
 GATED = {
+    "WaitNewPopupMessage",
     "ShowBlockWithCopy",
     "ShowConversation",
     "ShowFail",
@@ -65,13 +66,15 @@ NOT_YET_HANDLED = {
     # cover. NewPopupMessageAsync and WaitNewPopupMessage are themselves ungated,
     # and the Wishing well calls the latter -- so this is a real gap on a path the
     # quest has not reached, not dead code.
-    "ShowYesNoAsync": "GAP: routes through NewPopupMessageAsync, which ignores Suppress",
-    "ShowYesNoCancelAsync": "GAP: routes through NewPopupMessageAsync, which ignores Suppress",
+    "ShowYesNoAsync": "GAP: routes through NewPopupMessageAsync, which is not yet gated",
+    "ShowYesNoCancelAsync": "GAP: routes through NewPopupMessageAsync, which is not yet gated",
     "ShowFailAsync": "routes through ShowAsync, which honours Suppress",
     "ShowColorPickerAsync": "routes through PickOptionAsync, which honours Suppress",
     "ShowOptionListAsync": "routes through PickOptionAsync, which honours Suppress",
-    "NewPopupMessageAsync": "GAP: the async popup surface itself; WaitNewPopupMessage is called by the Wishing well",
-    "WaitNewPopupMessage": "GAP: called by the Wishing well and blocks, ignoring Suppress",
+    # NewPopupMessageAsync is the async popup surface. ShowYesNoAsync and
+    # ShowYesNoCancelAsync route through it, and it ignores Suppress, so it is the
+    # remaining gap.
+    "NewPopupMessageAsync": "GAP: the async popup surface itself; ShowYesNoAsync and ShowYesNoCancelAsync route through it",
 }
 
 # Screens the harness does not drive, so anything only they can raise is unreachable.
@@ -184,3 +187,20 @@ def test_suppress_is_set_globally_not_only_around_one_call():
     assert re.search(r"setPopupSuppress\s+true", embark), "Suppress is never set to true"
     # And the reason the per-call gates existed is now recorded where it is set.
     assert "Popup.Suppress" in embark or "popup Suppress" in embark
+
+
+def test_the_blocking_popup_primitive_is_gated():
+    """WaitNewPopupMessage is where the space bar comes from, so it is gated directly.
+
+    The public-popup scan above only collects `Show*` and `PickOption`, so this
+    method is invisible to it. It is not a popup by that naming, but it is the one
+    that actually blocks: the modern-UI path of ShowBlockWithCopy enters it and the
+    method's own return value is Keys.Space. It also ignores Popup.Suppress, and
+    gating only its caller covered one caller of several -- the Wishing well and the
+    death notices reach it too.
+    """
+    gated = _gated_in_mod()
+    assert "WaitNewPopupMessage" in gated, (
+        "WaitNewPopupMessage is ungated: examining anything with a copyable "
+        "description blocks on a keypress the harness cannot deliver"
+    )
