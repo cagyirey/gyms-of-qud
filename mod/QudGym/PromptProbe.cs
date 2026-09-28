@@ -550,7 +550,7 @@ static class WaitNewPopupMessageGate
                        System.Collections.Generic.List<Qud.UI.QudMenuItem> buttons,
                        System.Action<Qud.UI.QudMenuItem> callback,
                        System.Collections.Generic.List<Qud.UI.QudMenuItem> options,
-                       string title)
+                       string title, int DefaultSelected)
     {
         try
         {
@@ -584,7 +584,24 @@ static class WaitNewPopupMessageGate
                 return;
             }
 
-            int chosen = QudGymBridge.MenuTurn(title ?? "", message ?? "", labels.ToArray(), true, 0, 60000);
+            // The game's own default, never a wait.
+            //
+            // WaitNewPopupMessage is `async void`, so a prefix on it runs on the
+            // caller's thread. Asking the question here meant MenuTurn waiting on
+            // the caller's thread -- and during bootGame that is the core thread, so
+            // a popup raised while embarking stalled the whole boot for a minute per
+            // popup, with nobody connected to answer it. A gate that blocks the game
+            // thread to consult a client that may not exist is worse than the popup.
+            //
+            // So the choice is the one the game itself would have highlighted, the
+            // caller is told what was on offer, and the thread is released. A caller
+            // that genuinely needs a decision can read it from the log or the
+            // observation; nothing waits on a question with no listener.
+            int chosen = DefaultSelected;
+            if (chosen < 0 || chosen >= items.Count)
+                chosen = 0;
+            QudGymBridge.Note("newpopup default " + chosen + " of " + items.Count
+                + " -> " + (chosen >= 0 && chosen < items.Count ? labels[chosen] : "?"));
             if (chosen >= 0 && chosen < items.Count && callback != null)
                 callback(items[chosen]);
         }
