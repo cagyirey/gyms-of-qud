@@ -407,14 +407,29 @@ static class PickItemGate
                     continue;
                 return candidate;
             }
-            QudGymBridge.Note(
-                "loot gate NOT bound: no ShowPicker(IList<GameObject>, ref bool, ...) overload;"
-                + " found " + typeof(XRL.UI.PickItem).GetMethods().Length + " ShowPicker candidates");
+            // Logging must not be able to fail the resolution. The offline binding
+            // check calls this method with no bridge initialised, and a note that
+            // threw there would look exactly like a resolver that cannot bind.
+            try
+            {
+                QudGymBridge.Note(
+                    "loot gate NOT bound: no ShowPicker(IList<GameObject>, ref bool, ...) overload"
+                    + " among " + typeof(XRL.UI.PickItem).GetMethods().Length + " candidates");
+            }
+            catch (System.Exception)
+            {
+            }
             return null;
         }
         catch (System.Exception ex)
         {
-            QudGymBridge.Note("loot gate target resolution failed " + ex.GetBaseException().Message);
+            try
+            {
+                QudGymBridge.Note("loot gate target resolution failed " + ex.GetBaseException().Message);
+            }
+            catch (System.Exception)
+            {
+            }
             return null;
         }
     }

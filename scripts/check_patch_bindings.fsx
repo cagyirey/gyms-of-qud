@@ -66,25 +66,81 @@ let describeTypes (types: Type[]) =
     else String.Join(", ", Array.map (fun (t: Type) -> t.Name) types)
 
 let unresolved = ResizeArray<string>()
-let resolved = 0
+let mutable resolved = 0
 
 for patchType in modAssembly.GetTypes() do
     for attribute in patchType.GetCustomAttributes(patchAttribute, false) do
-        // Harmony keeps everything on a nested info struct.
-        let info = attribute.GetType().GetField("info").GetValue(attribute)
-        let field (name: string) : obj = info.GetType().GetField(name).GetValue(info)
+        // Harmony keeps everything on a nested info struct, and a bare
+        // [HarmonyPatch] -- one that names no target because the class resolves it
+        // through TargetMethod -- has no info at all.
+        //
+        // This dereferenced it unconditionally, so a runtime-resolved patch made the
+        // whole script throw. Because the wrapper treated exit code 1 as "ran and
+        // found failures", the crash was reported as a clean pass, which is how a
+        // broken resolver looked bound for a whole session.
+        let info =
+            match attribute.GetType().GetField("info") with
+            | null -> null
+            | f ->
+                match f.GetValue(attribute) with
+                | :? obj as value -> value
+                | _ -> null
+        let field (name: string) : obj =
+            if isNull info then null
+            else
+                match info.GetType().GetField(name) with
+                | null -> null
+                | f -> f.GetValue(info)
         let declaringType = field "declaringType" :?> Type
         let methodName = field "methodName" :?> string
         let argumentTypes = field "argumentTypes" :?> Type[]
         let generics = field "generics" :?> Type[]
 
-        let target =
-            try
-                resolve.Invoke(null, [| declaringType; methodName; argumentTypes; generics |])
-            with ex ->
-                ex.InnerException :?> MethodBase
+        // A patch that names no target in its attribute resolves it at run time
+        // through a static TargetMethod or TargetMethods, and that is the only way
+        // to find out whether it will work.
+        //
+        // Reading the attribute alone reported these as resolved: all three fields
+        // are null, AccessTools.Method(null, null, null, null) returns something
+        // non-null, and the check printed "ok" for a resolver that threw on the
+        // first run and took the whole mod's PatchAll down with it. A false ok is
+        // worse than no check, so this calls the resolver the way Harmony does.
+        let resolverMethod =
+            patchType.GetMethod("TargetMethod", BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Static)
 
-        if isNull target then
+        let invokeResolver (m: MethodInfo) : MethodBase =
+            let outcome : obj =
+                try
+                    m.Invoke(null, [||])
+                with
+                | :? TargetInvocationException as ex -> box ex.InnerException
+                | _ -> null
+            match outcome with
+            | :? MethodBase as target -> target
+            | _ -> null
+
+        let resolver : MethodBase =
+            if isNull resolverMethod then null else invokeResolver resolverMethod
+
+        if not (isNull resolver) then
+            if isNull (box resolver) then
+                unresolved.Add(patchType.Name + " -> TargetMethod() returned null")
+                printfn "FAIL  %-28s TargetMethod() returned null" patchType.Name
+            else
+                resolved <- resolved + 1
+                printfn "ok    %-28s %s (resolved at runtime)" patchType.Name resolver.Name
+
+        let target : MethodBase =
+            let outcome : obj =
+                try
+                    resolve.Invoke(null, [| declaringType; methodName; argumentTypes; generics |])
+                with ex -> box ex.InnerException
+            match outcome with
+            | :? MethodBase as found -> found
+            | _ -> null
+
+        if not (isNull resolver) then ()
+        elif isNull target then
             unresolved.Add(
                 sprintf "%s -> %s.%s(%s)"
                     patchType.Name

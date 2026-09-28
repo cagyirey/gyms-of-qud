@@ -80,9 +80,20 @@ def check(managed: Path, mod_dll: Path = MOD_DLL, dotnet: str | None = None) -> 
         check=False, env=environment,
     )
     output = result.stdout + result.stderr
+    # A crash and a clean pass must not look alike.
+    #
+    # dotnet fsi exits 1 on a compile error and on an unhandled exception as well as
+    # on "ran and found failures", so the exit code alone could not tell them apart
+    # -- and a script that never ran reported that every patch target binds. The
+    # marker line is printed only when the loop actually completed.
+    if "resolved " not in output:
+        raise BindingError(
+            "binding check did not run to completion, so its result means nothing:\n"
+            + output.strip()[-2000:]
+        )
     failures = parse_failures(output)
     if result.returncode not in (0, 1):
-        raise BindingError(f"binding check did not run:\n{output.strip()}")
+        raise BindingError(f"binding check did not run:\n{output.strip()[-2000:]}")
     return failures
 
 
