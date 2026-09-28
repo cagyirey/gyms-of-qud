@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <QudManaged Condition="'$(QudManaged)' == ''">$(HOME)/Library/Application Support/Steam/steamapps/common/Caves of Qud/CoQ.app/Contents/Resources/Data/Managed</QudManaged>
+    <!-- The game compiles this mod from source in its own Mods directory, so the
+         build output must not land beside the sources: a second copy of the
+         assembly attributes in lib/ makes the game's own compile fail with
+         duplicate-attribute errors, and the mod does not load at all. Built to
+         local/ for inspection only, and deployed by scripts/deploy_mod.sh. -->
+    <BaseOutputPath>$(MSBuildThisFileDirectory)../../local/qud-mod-build/</BaseOutputPath>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Bridge.cs" />
+    <Compile Include="Diagnostic.cs" />
+    <Compile Include="TurnProbe.cs" />
+    <Compile Include="PromptProbe.cs" />
+    <Compile Include="WorldGenGate.cs" />
+    <Compile Include="PushProbe.cs" />
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(QudManaged)/Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(QudManaged)/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(QudManaged)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

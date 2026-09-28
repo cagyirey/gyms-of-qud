@@ -291,3 +291,48 @@ def test_generated_schemas_are_current():
     from qudgym.models import RpcRequest, RpcResponse, Observation, Transition, Capabilities
     for model in (RpcRequest, RpcResponse, Observation, Transition, Capabilities):
         assert json.loads((ROOT / 'schemas' / f'{model.__name__}.schema.json').read_text()) == model.model_json_schema()
+
+
+def test_preset_index_is_current():
+    """The mod reads a generated index, not the library, so it must track it."""
+    from qudgym.eye.cli import preset_index
+
+    index = ROOT / "mod" / "QudGym.Impl" / "presets.index"
+    assert index.read_text(encoding="utf-8") == preset_index(
+        ROOT / "builds" / "library.json", ROOT
+    )
+
+
+def test_every_bootable_preset_starts_somewhere():
+    from qudgym.eye.cli import preset_index
+
+    rows = [line.split("\t") for line in
+            preset_index(ROOT / "builds" / "library.json", ROOT).splitlines()]
+    assert rows
+    for pid, sha, path, location in rows:
+        assert pid and len(sha) == 64, f"{pid}: index row is malformed"
+        assert (ROOT / path).is_file(), f"{pid}: sheet {path} is missing"
+        # A boot with no declared location would silently land somewhere
+        # unreported, which is the failure this index exists to prevent.
+        assert location, f"{pid}: no StartingLocation, so the boot cannot state where it landed"
+
+
+def test_every_module_in_the_package_imports():
+    """A module nothing imports can rot unnoticed.
+
+    live.py sat syntactically broken through a green run because only
+    scripts/generate_trajectory.py imports it, and no test did. Importing every
+    module makes that failure loud without asserting anything about behaviour.
+    """
+    import importlib
+    import pkgutil
+
+    import qudgym
+
+    failures = []
+    for info in pkgutil.walk_packages(qudgym.__path__, prefix="qudgym."):
+        try:
+            importlib.import_module(info.name)
+        except Exception as exc:  # noqa: BLE001 - report, do not mask
+            failures.append(f"{info.name}: {type(exc).__name__}: {exc}")
+    assert not failures, "\n".join(failures)

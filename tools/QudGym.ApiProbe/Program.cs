@@ -51,8 +51,19 @@ try
             continue;
         }
         var type = reader.GetTypeDefinition(handle);
-        bool Include(string name) => filters.Length == 0 || filters.Any(
-            filter => name.Contains(filter, StringComparison.OrdinalIgnoreCase));
+        // A name that was asked for exactly is a dependency and is never dropped.
+        // Anything else is here only because it contains a filter, and there can
+        // be a great many of those.
+        //
+        // The cap applies to the incidental names alone. Capping everything
+        // silently truncated the list, and XRL.World.GameObject has more members
+        // than the cap, so GetPart -- which the mod resolves as a generic method
+        // and depends on -- simply did not appear. A report that omits a member
+        // the code uses is worse than no report, because it reads as complete.
+        bool IsNamed(string name) => filters.Any(
+            filter => string.Equals(name, filter, StringComparison.OrdinalIgnoreCase));
+        bool Include(string name) => filters.Length == 0 || IsNamed(name)
+            || filters.Any(filter => name.Contains(filter, StringComparison.OrdinalIgnoreCase));
         var members = new List<object>();
         var matched = 0;
         foreach (var methodHandle in type.GetMethods())
@@ -61,7 +72,7 @@ try
             var name = reader.GetString(method.Name);
             if (!Include(name)) continue;
             matched++;
-            if (members.Count >= 96) continue;
+            if (members.Count >= 96 && !IsNamed(name)) continue;
             var sig = method.DecodeSignature(names, (object?)null);
             members.Add(new { kind = "method", name, attributes = method.Attributes.ToString(),
                 return_type = sig.ReturnType, parameters = sig.ParameterTypes,
@@ -73,7 +84,7 @@ try
             var name = reader.GetString(field.Name);
             if (!Include(name)) continue;
             matched++;
-            if (members.Count >= 96) continue;
+            if (members.Count >= 96 && !IsNamed(name)) continue;
             members.Add(new { kind = "field", name, attributes = field.Attributes.ToString(),
                 field_type = field.DecodeSignature(names, (object?)null) });
         }
@@ -122,26 +133,252 @@ catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or B
 
 internal static class Queries
 {
-    public static Dictionary<string, string[]> Create() => new(StringComparer.Ordinal)
+    public static Dictionary<string, string[]> Create()
     {
-        ["XRL.IPlayerMutator"] = [],
-        ["XRL.PlayerMutator"] = [],
-        ["XRL.PlayerMutatorAttribute"] = [],
-        ["XRL.World.IPart"] = ["WantEvent", "HandleEvent", "ParentObject", "Register"],
-        ["XRL.World.EndTurnEvent"] = [],
-        ["XRL.World.BeforeRenderEvent"] = [],
-        ["XRL.World.BeginTakeActionEvent"] = [],
-        ["XRL.The"] = ["Player", "Game"],
-        ["XRL.World.GameObject"] = ["CurrentCell", "DisplayName", "Stat", "Visible", "Render",
-            "Inventory", "Body", "ActivatedAbilit", "GetPart", "HasPart", "AddPart"],
-        ["XRL.World.Cell"] = ["Visible", "Explored", "Objects", "ParentZone", "get_X", "get_Y"],
-        ["XRL.World.Zone"] = ["Visible", "Explored", "GetCell", "Width", "Height"],
-        ["XRL.World.Parts.Body"] = ["GetPart", "GetEquipped", "GetBody"],
-        ["XRL.World.Anatomy.BodyPart"] = ["Type", "Name", "Equipped", "Child", "Part"],
-        ["XRL.World.Parts.ActivatedAbilities"] = ["List", "Get", "Ability"],
-        ["XRL.UI.MessageQueue"] = ["Message", "Get"],
-        ["ConsoleLib.Console.Keyboard"] = ["get", "Key", "Input", "Push"],
-    };
+        // Built by merging, not by dictionary-literal assignment.
+        //
+        // A dictionary literal silently keeps the last assignment for a key, so
+        // two entries for one type quietly discarded the first. Eight types were
+        // affected, and XRL.World.GameObject lost Stat -- which is what the API
+        // probe test failed on in CI, with no local signal. Merging here means a
+        // type is described by every name asked of it, and adding a name to a type
+        // cannot silently discard the list above it.
+        var merged = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        void Add(string key, params string[] names)
+        {
+            if (!merged.TryGetValue(key, out var list))
+            {
+                list = new List<string>();
+                merged[key] = list;
+            }
+            foreach (var name in names)
+                if (!list.Contains(name))
+                    list.Add(name);
+        }
+
+        Add("XRL.IPlayerMutator");
+        Add("XRL.PlayerMutator");
+        Add("XRL.PlayerMutatorAttribute");
+        Add("XRL.World.IPart",
+            "WantEvent",
+            "HandleEvent",
+            "ParentObject",
+            "Register");
+        Add("XRL.World.EndTurnEvent");
+        Add("XRL.World.BeforeRenderEvent");
+        Add("XRL.World.BeginTakeActionEvent");
+        Add("XRL.The",
+            "Player",
+            "Game");
+        Add("XRL.Core.XRLCore",
+            "Update",
+            "LateUpdate",
+            "Main",
+            "RunGame",
+            "Tick",
+            "Idle",
+            "Wait",
+            "Step",
+            "WriteConsoleLine",
+            "NewGame",
+            "IsCoreThread",
+            "RegisterNewMessageLogEntryCallback",
+            "CallNewMessageLogEntryCallbacks");
+        Add("XRL.World.AI.Pathfinding");
+        Add("XRL.World.Parts.Interactable");
+        Add("XRL.CharacterBuilds.EmbarkBuilder");
+        Add("XRL.CharacterBuilds.AbstractEmbarkBuilderModule");
+        Add("ConsoleLib.Console+TextConsole",
+            "Get",
+            "Row",
+            "Buffer",
+            "Scroll",
+            "Lines");
+        Add("XRL.World.GameObject",
+            "CurrentCell",
+            "DisplayName",
+            "Stat",
+            "Visible",
+            "Render",
+            "Inventory",
+            "Body",
+            "ActivatedAbilit",
+            "GetPart",
+            "HasPart",
+            "AddPart",
+            "IsPlayer",
+            "GetRenderString",
+            "IsVisibleTo",
+            "Blueprint",
+            "GetBlueprint",
+            "FireEvent");
+        Add("XRL.World.Cell",
+            "Visible",
+            "Explored",
+            "Objects",
+            "ParentZone",
+            "get_X",
+            "get_Y");
+        Add("XRL.World.Zone",
+            "Visible",
+            "Explored",
+            "GetCell",
+            "Width",
+            "Height",
+            "ID",
+            "Name");
+        Add("XRL.World.Parts.Body",
+            "GetPart",
+            "GetEquipped",
+            "GetBody",
+            "GetParts");
+        Add("XRL.World.Anatomy.BodyPart",
+            "Type",
+            "Name",
+            "Equipped",
+            "Child",
+            "Part",
+            "Primary",
+            "GetOrdinalName");
+        Add("XRL.World.Parts.ActivatedAbilities",
+            "List",
+            "Get",
+            "Ability");
+        Add("XRL.UI.MessageQueue",
+            "Message",
+            "Get");
+        Add("ConsoleLib.Console.Keyboard");
+        Add("XRL.Messages",
+            "Message",
+            "Get",
+            "Log",
+            "Add",
+            "Clear");
+        Add("Qud.UI.MessageLogLineData");
+        Add("Qud.UI.MessageLogWindow");
+        Add("ConsoleLib.Console.ScreenBuffer");
+        Add("XRL.UI.Popup",
+            "Show",
+            "Text",
+            "Options",
+            "Menu",
+            "ShowFail",
+            "ShowBlock",
+            "ShowBlockPrompt",
+            "ShowBlockSpace",
+            "ShowBlockWithCopy",
+            "ShowSpace",
+            "PickOption",
+            "Suppress",
+            "Transform",
+            "WaitNewPopupMessage",
+            "NewPopupMessageAsync");
+        Add("XRL.UI.ConversationUI",
+            "HaveConversation",
+            "Select",
+            "CurrentChoices",
+            "CurrentConversation",
+            "Input",
+            "Render");
+        Add("XRL.World.Conversations.Conversation",
+            "GetDisplayText",
+            "Value");
+        Add("XRL.World.Conversations.ConversationChoice",
+            "GetDisplayText",
+            "Value");
+        Add("XRL.World.Quest",
+            "ID",
+            "DisplayName",
+            "StepsByID",
+            "ShowStartPopup",
+            "ShowFailPopup",
+            "ShowFailStepPopup",
+            "ShowFinishPopup",
+            "ShowFinishStepPopup",
+            "BonusAtLevel",
+            "ReadyToTurnIn");
+        Add("XRL.World.QuestStep",
+            "ID",
+            "Name",
+            "Text",
+            "Finished",
+            "Ordinal",
+            "Collapse");
+        Add("XRL.UI.QuestLog",
+            "GetLinesForQuest");
+        Add("XRL.XRLGame",
+            "Quests",
+            "FinishedQuests",
+            "Turns",
+            "Messages");
+        Add("XRL.Collections.StringMap`1",
+            "Count",
+            "Item",
+            "ContainsKey",
+            "GetEnumerator",
+            "Values",
+            "Keys",
+            "TryGetValue");
+        Add("XRL.World.Parts.Inventory",
+            "GetEquipmentListForSlot",
+            "GetObjectsReadonly",
+            "GetObjects",
+            "GetInventoryObjectList");
+        Add("XRL.World.Anatomy.BodyPartType",
+            "Type",
+            "Name",
+            "Ordinal");
+        Add("ConsoleLib.Console.Markup",
+            "Strip",
+            "Transform");
+        Add("ConsoleLib.Console.MarkupNode",
+            "Name");
+        Add("XRL.UI.Screens",
+            "Show",
+            "ShowPopup",
+            "CurrentScreen");
+        Add("XRL.UI.InventoryScreen",
+            "Show",
+            "EquipmentList");
+        Add("XRL.UI.EquipmentScreen",
+            "Show",
+            "ShowBodypartEquipUI",
+            "EquipmentList");
+        Add("XRL.World.Event",
+            "SetParameter",
+            "GetParameter",
+            "GetStringParameter");
+        Add("XRL.World.Parts.ConversationScript",
+            "AttemptConversation",
+            "GetActiveConversationBlueprint");
+        Add("Qud.UI.WorldGenerationScreen",
+            "Show");
+
+        // Taking something out of a container. ShowPicker is asked which item to
+        // take and returns the choice, so it is gated like any other question, and
+        // the style is what distinguishes a container from an ability's part list.
+        Add("XRL.UI.PickItem", "ShowPicker", "ShowPickerAsync");
+        Add("XRL.UI.PickItem+PickItemDialogStyle", "SelectItemDialog", "StoreItemDialog", "GetItemDialog");
+        Add("Qud.UI.SingletonWindowBase",
+            "Show");
+        Add("XRL.UI.DialogResult",
+            "Yes",
+            "No",
+            "Cancel");
+        Add("Genkit.Location2D");
+        Add("ConsoleLib.Console.KeyCode");
+        Add("ConsoleLib.Console.Keys",
+            "Space",
+            "Enter",
+            "Escape");
+        Add("ConsoleLib.Console.IRenderable");
+        Add("ConsoleLib.Console.Renderable",
+            "GetRenderString");
+
+        return merged.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray(), StringComparer.Ordinal);
+    }
+
 }
 
 internal sealed class SignatureNames : ISignatureTypeProvider<string, object?>

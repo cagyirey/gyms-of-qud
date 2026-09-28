@@ -30,3 +30,6 @@ snapshots/
 
 # Agent-eye schemas are generated from the typed source contract.
 /schemas/eye/
+
+# macOS
+.DS_Store

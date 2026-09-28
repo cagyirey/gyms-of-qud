@@ -14,7 +14,10 @@ class Model(BaseModel):
 
 class CandidateAction(Model):
     id: Identifier
-    kind: Literal["move", "wait", "answer", "interact", "ability", "inventory"]
+    # Semantic categories, not verbs. A long move and a single step are both
+    # "move"; the id distinguishes them. "info" covers read-only console verbs
+    # such as look, quests, journal and message history.
+    kind: Literal["move", "wait", "answer", "interact", "ability", "inventory", "info"]
     label: str
     # Arguments are descriptive metadata, not an arbitrary command execution surface.
     arguments: dict[str, JsonValue] = Field(default_factory=dict)
@@ -40,11 +43,58 @@ class PerceivedEntity(Model):
     y: int
     # Deliberately no blueprint, true identity, precise enemy HP, or hidden effects.
     perceived_status: str | None = None
+    # Presentation only: the glyph the player sees. None when the build does not
+    # expose one, which is reported rather than omitted so an agent can tell
+    # "no glyph" from "not looked at".
+    glyph: str | None = None
+    # The game's own actor predicate when the build exposes one. Optional
+    # because it does not resolve on every build; a missing value means unknown,
+    # not "not an actor".
+    is_actor: bool | None = None
+
+
+class ViewInfo(Model):
+    """How much of the world the observation actually covers.
+
+    A radius tells the agent the edge of what it can see, so a missing
+    neighbour is not mistaken for the edge of the map.
+    """
+
+    radius: int = Field(ge=0)
+    zone_width: int = Field(ge=0)
+    zone_height: int = Field(ge=0)
 
 
 class Prompt(Model):
     kind: Literal["choice", "direction", "target", "text"]
     text: str
+    # The options the game itself offers, in the order it numbers them. A
+    # conversation is the one place the player must choose from a list the game
+    # builds, so those options are published rather than summarised: a caller
+    # that cannot see them cannot answer, and one shown a paraphrase may answer
+    # the wrong thing. Empty when the prompt is not a choice.
+    options: tuple[str, ...] = ()
+    # The positions, 1-based like the options above, that the game itself will not
+    # accept. Published because it is part of what was asked.
+    #
+    # A conversation greys a choice it will refuse -- one that costs more
+    # reputation than the player holds, or asks for a note the journal does not
+    # have -- and that grey is the game's own verdict, not a guess. Answering such
+    # a choice is not an error: the conversation simply stays where it was, having
+    # spent a turn. So a caller told only the option text cannot tell a choice it
+    # may take from one it may not, and would spend turns on the second kind.
+    #
+    # Empty when the game expressed no verdict, which is not the same as every
+    # option being available.
+    unavailable: tuple[int, ...] = ()
+    # Whether the game itself would let the player walk away from this prompt.
+    #
+    # PickOption carries an AllowEscape flag, and a cancelled menu returns -1
+    # rather than an index, so a caller has to be able to express "no". Offering
+    # answer:0 only when the game permits it keeps the action list a description
+    # of what is actually possible, the same reason options are published rather
+    # than summarised.
+    allow_cancel: bool = False
 
 
 class Observation(Model):
@@ -57,7 +107,16 @@ class Observation(Model):
     entities: tuple[PerceivedEntity, ...] = ()
     messages: tuple[str, ...] = ()
     prompt: Prompt | None = None
+    # The player's open quests, in the quest log's own words.
+    #
+    # This is read, not opened. CmdQuests pushes the QuestLog screen, and a pushed
+    # screen blocks waiting for a key the harness cannot deliver -- the same wall as
+    # a popup, with no call to intercept and no question to publish. So the content
+    # comes from the quest log's own formatter over the game's own quest state, and
+    # a caller can see the quest it is being asked about without a window appearing.
+    quests: tuple[str, ...] = ()
     actions: tuple[CandidateAction, ...]
+    view: ViewInfo | None = None
 
     @model_validator(mode="after")
     def consistent_boundary(self):
